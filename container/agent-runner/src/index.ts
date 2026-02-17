@@ -54,6 +54,30 @@ interface SDKUserMessage {
   session_id: string;
 }
 
+const MODEL_CONF_PATH = '/workspace/group/model.conf';
+
+const MODEL_MAP: Record<string, string> = {
+  'haiku': 'claude-haiku-4-5-20251001',
+  'sonnet': 'claude-sonnet-4-5-20250929',
+  'opus': 'claude-opus-4-6',
+};
+
+function readModelConfig(): string | undefined {
+  try {
+    if (fs.existsSync(MODEL_CONF_PATH)) {
+      const value = fs.readFileSync(MODEL_CONF_PATH, 'utf-8').trim().toLowerCase();
+      if (MODEL_MAP[value]) {
+        return MODEL_MAP[value];
+      }
+      // Allow full model IDs too
+      if (value.startsWith('claude-')) {
+        return value;
+      }
+    }
+  } catch { /* use default */ }
+  return undefined;
+}
+
 const IPC_INPUT_DIR = '/workspace/ipc/input';
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
@@ -413,11 +437,17 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
+  const model = readModelConfig();
+  if (model) {
+    log(`Using model: ${model}`);
+  }
+
   for await (const message of query({
     prompt: stream,
     options: {
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
+      model,
       resume: sessionId,
       resumeSessionAt: resumeAt,
       systemPrompt: globalClaudeMd
@@ -431,7 +461,8 @@ async function runQuery(
         'TeamCreate', 'TeamDelete', 'SendMessage',
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
-        'mcp__nanoclaw__*'
+        'mcp__nanoclaw__*',
+        'mcp__research__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -446,6 +477,10 @@ async function runQuery(
             NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
+        },
+        research: {
+          type: 'http',
+          url: 'http://192.168.68.57:8000/mcp',
         },
       },
       hooks: {
