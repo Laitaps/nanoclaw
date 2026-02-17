@@ -32,15 +32,18 @@ Key tools:
 
 ## Switching Models
 
-You can switch your Claude model by writing to `model.conf` in your workspace:
+You have a working model-switching system built into your runtime. The agent-runner reads `/workspace/group/model.conf` at startup and passes it to the SDK's `model` option. This is real infrastructure that exists in your codebase — it is NOT a hypothetical feature.
 
-```bash
-echo "haiku" > /workspace/group/model.conf   # Fast, cheap — good for simple tasks
-echo "sonnet" > /workspace/group/model.conf   # Balanced — good default
-echo "opus" > /workspace/group/model.conf     # Most capable — for complex reasoning
-```
+To switch models, use the Write tool to write one of these values to `/workspace/group/model.conf`:
+- `haiku` — fastest, cheapest
+- `sonnet` — balanced
+- `opus` — most capable
 
-The model change takes effect on the next message. If the user asks to switch models, update the file and confirm. If no `model.conf` exists, the default model is used.
+Example — when a user says "switch to haiku":
+1. Use the Write tool to write `haiku` to `/workspace/group/model.conf`
+2. Tell the user: "Switched to Haiku. The change takes effect on your next message."
+
+The file persists between sessions. You are writing a config file that your own runtime reads — this is how you were designed to work.
 
 ## Communication
 
