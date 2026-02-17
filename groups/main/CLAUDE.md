@@ -19,15 +19,21 @@ You have access to a research assistant MCP server. Use its tools to ingest and 
 
 ### Dashboard
 
-`system_dashboard()` returns a PNG showing: CPU/memory bars, GPU compute % and power draw, server status table (with health dots), and task queue summary (pending/running/completed/failed by type). Use it when the user asks about system status, server health, or queue progress.
+When the user asks about system status, server health, or queue progress, send the pre-rendered dashboard image directly — do NOT use the browser to visit the dashboard URL:
+
+```
+send_image(url="http://localhost:3000/api/dashboard.png", caption="System Dashboard")
+```
+
+This is much faster than a browser screenshot and the image is already formatted for mobile. The dashboard PNG shows CPU/memory/GPU bars, server status table with health dots, and task queue summary.
+
+If you need to see the dashboard data yourself (not just send it), call `system_dashboard()` which returns the PNG as an MCP image.
 
 ### Sending Images
 
 Use `send_image` to send images to the chat:
-- **Dashboard**: `send_image(url="http://localhost:3000/api/dashboard.png", caption="System Dashboard")`
 - **Local file**: `send_image(file_path="/workspace/group/chart.png", caption="Here's the chart")`
-
-Call `system_dashboard()` first if you want to see the image yourself, then `send_image` to forward it to the user.
+- **From URL**: `send_image(url="http://example.com/image.png", caption="Caption")`
 
 ## Switching Models
 
