@@ -93,6 +93,7 @@ const testGroup: RegisteredGroup = {
 
 const testInput = {
   prompt: 'Hello',
+  modelFamily: 'claude',
   groupFolder: 'test-group',
   chatJid: 'test@g.us',
   isMain: false,

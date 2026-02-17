@@ -5,6 +5,7 @@ import path from 'path';
 import {
   ASSISTANT_NAME,
   DATA_DIR,
+  GROUPS_DIR,
   IDLE_TIMEOUT,
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
@@ -43,10 +44,24 @@ import { logger } from './logger.js';
 export { escapeXml, formatMessages } from './router.js';
 
 let lastTimestamp = '';
-let sessions: Record<string, string> = {};
+let sessions: Record<string, Record<string, string>> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
+
+/**
+ * Determine the model family from a group's model.conf.
+ * Returns 'local' if model.conf contains 'local', otherwise 'claude'.
+ */
+function getModelFamily(groupFolder: string): string {
+  const modelConfPath = path.join(GROUPS_DIR, groupFolder, 'model.conf');
+  try {
+    const value = fs.readFileSync(modelConfPath, 'utf-8').trim().toLowerCase();
+    return value === 'local' ? 'local' : 'claude';
+  } catch {
+    return 'claude';
+  }
+}
 
 let whatsapp: WhatsAppChannel;
 const queue = new GroupQueue();
@@ -212,7 +227,8 @@ async function runAgent(
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
   const isMain = group.folder === MAIN_GROUP_FOLDER;
-  const sessionId = sessions[group.folder];
+  const modelFamily = getModelFamily(group.folder);
+  const sessionId = sessions[group.folder]?.[modelFamily];
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
@@ -243,8 +259,10 @@ async function runAgent(
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
         if (output.newSessionId) {
-          sessions[group.folder] = output.newSessionId;
-          setSession(group.folder, output.newSessionId);
+          const family = output.modelFamily || modelFamily;
+          if (!sessions[group.folder]) sessions[group.folder] = {};
+          sessions[group.folder][family] = output.newSessionId;
+          setSession(group.folder, family, output.newSessionId);
         }
         await onOutput(output);
       }
@@ -256,6 +274,7 @@ async function runAgent(
       {
         prompt,
         sessionId,
+        modelFamily,
         groupFolder: group.folder,
         chatJid,
         isMain,
@@ -265,8 +284,10 @@ async function runAgent(
     );
 
     if (output.newSessionId) {
-      sessions[group.folder] = output.newSessionId;
-      setSession(group.folder, output.newSessionId);
+      const family = output.modelFamily || modelFamily;
+      if (!sessions[group.folder]) sessions[group.folder] = {};
+      sessions[group.folder][family] = output.newSessionId;
+      setSession(group.folder, family, output.newSessionId);
     }
 
     if (output.status === 'error') {

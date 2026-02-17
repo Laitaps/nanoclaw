@@ -40,9 +40,25 @@ To switch models, use the Write tool to write one of these values to `/workspace
 - `opus` — most capable (Claude)
 - `local` — local qwen3-next model via LiteLLM proxy (no API costs, runs on your own hardware)
 
-Example — when a user says "switch to haiku" or "go local":
-1. Use the Write tool to write the model name (e.g. `haiku` or `local`) to `/workspace/group/model.conf`
+### Switching within the same family (e.g. haiku -> opus)
+
+1. Use the Write tool to write the model name to `/workspace/group/model.conf`
 2. Tell the user: "Switched to [model]. The change takes effect on your next message."
+
+### Switching between families (Claude <-> local)
+
+When switching between Claude and local models, the runtime uses separate sessions for each family. To bridge context between them:
+
+1. Call `mcp__research__compact_conversation` with a summary of the key points from the current conversation
+2. Call `mcp__research__store_session_context` with `session_key` = `main:claude` or `main:local` (whichever family you're leaving)
+3. Use the Write tool to write the model name to `/workspace/group/model.conf`
+4. Tell the user: "Switched to [model]. The change takes effect on your next message."
+
+### Retrieving prior context after a switch
+
+If you need context from a previous session on the other model family:
+- Call `mcp__research__get_session_context("main:claude")` or `mcp__research__get_session_context("main:local")`
+- Call `mcp__research__search_session_context("topic query")` for semantic search across stored contexts
 
 The file persists between sessions. You are writing a config file that your own runtime reads — this is how you were designed to work.
 

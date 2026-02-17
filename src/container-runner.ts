@@ -37,6 +37,7 @@ function getHomeDir(): string {
 export interface ContainerInput {
   prompt: string;
   sessionId?: string;
+  modelFamily: string;
   groupFolder: string;
   chatJid: string;
   isMain: boolean;
@@ -48,6 +49,7 @@ export interface ContainerOutput {
   status: 'success' | 'error';
   result: string | null;
   newSessionId?: string;
+  modelFamily?: string;
   error?: string;
 }
 

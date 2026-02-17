@@ -22,6 +22,7 @@ import { fileURLToPath } from 'url';
 interface ContainerInput {
   prompt: string;
   sessionId?: string;
+  modelFamily: string;
   groupFolder: string;
   chatJid: string;
   isMain: boolean;
@@ -33,6 +34,7 @@ interface ContainerOutput {
   status: 'success' | 'error';
   result: string | null;
   newSessionId?: string;
+  modelFamily?: string;
   error?: string;
 }
 
@@ -88,6 +90,16 @@ function readModelConfig(): ModelConfig {
     }
   } catch { /* use default */ }
   return {};
+}
+
+function getModelFamily(): string {
+  try {
+    if (fs.existsSync(MODEL_CONF_PATH)) {
+      const value = fs.readFileSync(MODEL_CONF_PATH, 'utf-8').trim().toLowerCase();
+      return value === 'local' ? 'local' : 'claude';
+    }
+  } catch { /* use default */ }
+  return 'claude';
 }
 
 const IPC_INPUT_DIR = '/workspace/ipc/input';
@@ -533,7 +545,8 @@ async function runQuery(
       writeOutput({
         status: 'success',
         result: textResult || null,
-        newSessionId
+        newSessionId,
+        modelFamily: getModelFamily(),
       });
     }
   }
@@ -611,7 +624,7 @@ async function main(): Promise<void> {
       }
 
       // Emit session update so host can track it
-      writeOutput({ status: 'success', result: null, newSessionId: sessionId });
+      writeOutput({ status: 'success', result: null, newSessionId: sessionId, modelFamily: getModelFamily() });
 
       log('Query ended, waiting for next IPC message...');
 
@@ -632,6 +645,7 @@ async function main(): Promise<void> {
       status: 'error',
       result: null,
       newSessionId: sessionId,
+      modelFamily: getModelFamily(),
       error: errorMessage
     });
     process.exit(1);

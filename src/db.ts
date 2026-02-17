@@ -61,8 +61,10 @@ function createSchema(database: Database.Database): void {
       value TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS sessions (
-      group_folder TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL
+      group_folder TEXT NOT NULL,
+      model_family TEXT NOT NULL DEFAULT 'claude',
+      session_id TEXT NOT NULL,
+      PRIMARY KEY (group_folder, model_family)
     );
     CREATE TABLE IF NOT EXISTS registered_groups (
       jid TEXT PRIMARY KEY,
@@ -95,6 +97,29 @@ function createSchema(database: Database.Database): void {
     ).run(`${ASSISTANT_NAME}:%`);
   } catch {
     /* column already exists */
+  }
+
+  // Migrate sessions table to support per-family sessions (composite primary key)
+  try {
+    // Check if model_family column exists
+    const info = database.pragma('table_info(sessions)') as Array<{ name: string }>;
+    const hasModelFamily = info.some((col) => col.name === 'model_family');
+    if (!hasModelFamily) {
+      database.exec(`
+        CREATE TABLE sessions_new (
+          group_folder TEXT NOT NULL,
+          model_family TEXT NOT NULL DEFAULT 'claude',
+          session_id TEXT NOT NULL,
+          PRIMARY KEY (group_folder, model_family)
+        );
+        INSERT INTO sessions_new (group_folder, model_family, session_id)
+          SELECT group_folder, 'claude', session_id FROM sessions;
+        DROP TABLE sessions;
+        ALTER TABLE sessions_new RENAME TO sessions;
+      `);
+    }
+  } catch {
+    /* table may not exist yet (fresh install), which is fine */
   }
 }
 
@@ -447,26 +472,29 @@ export function setRouterState(key: string, value: string): void {
 
 // --- Session accessors ---
 
-export function getSession(groupFolder: string): string | undefined {
+export function getSession(groupFolder: string, modelFamily: string = 'claude'): string | undefined {
   const row = db
-    .prepare('SELECT session_id FROM sessions WHERE group_folder = ?')
-    .get(groupFolder) as { session_id: string } | undefined;
+    .prepare('SELECT session_id FROM sessions WHERE group_folder = ? AND model_family = ?')
+    .get(groupFolder, modelFamily) as { session_id: string } | undefined;
   return row?.session_id;
 }
 
-export function setSession(groupFolder: string, sessionId: string): void {
+export function setSession(groupFolder: string, modelFamily: string, sessionId: string): void {
   db.prepare(
-    'INSERT OR REPLACE INTO sessions (group_folder, session_id) VALUES (?, ?)',
-  ).run(groupFolder, sessionId);
+    'INSERT OR REPLACE INTO sessions (group_folder, model_family, session_id) VALUES (?, ?, ?)',
+  ).run(groupFolder, modelFamily, sessionId);
 }
 
-export function getAllSessions(): Record<string, string> {
+export function getAllSessions(): Record<string, Record<string, string>> {
   const rows = db
-    .prepare('SELECT group_folder, session_id FROM sessions')
-    .all() as Array<{ group_folder: string; session_id: string }>;
-  const result: Record<string, string> = {};
+    .prepare('SELECT group_folder, model_family, session_id FROM sessions')
+    .all() as Array<{ group_folder: string; model_family: string; session_id: string }>;
+  const result: Record<string, Record<string, string>> = {};
   for (const row of rows) {
-    result[row.group_folder] = row.session_id;
+    if (!result[row.group_folder]) {
+      result[row.group_folder] = {};
+    }
+    result[row.group_folder][row.model_family] = row.session_id;
   }
   return result;
 }
@@ -588,7 +616,7 @@ function migrateJsonState(): void {
   > | null;
   if (sessions) {
     for (const [folder, sessionId] of Object.entries(sessions)) {
-      setSession(folder, sessionId);
+      setSession(folder, 'claude', sessionId);
     }
   }
 
