@@ -60,22 +60,34 @@ const MODEL_MAP: Record<string, string> = {
   'haiku': 'claude-haiku-4-5-20251001',
   'sonnet': 'claude-sonnet-4-5-20250929',
   'opus': 'claude-opus-4-6',
+  'local': 'claude-local',
 };
 
-function readModelConfig(): string | undefined {
+// LiteLLM proxy translates Claude API format to OpenAI-compatible format
+const LITELLM_PROXY_URL = 'http://127.0.0.1:4000';
+
+interface ModelConfig {
+  model?: string;
+  apiBaseUrl?: string;
+}
+
+function readModelConfig(): ModelConfig {
   try {
     if (fs.existsSync(MODEL_CONF_PATH)) {
       const value = fs.readFileSync(MODEL_CONF_PATH, 'utf-8').trim().toLowerCase();
+      if (value === 'local') {
+        return { model: MODEL_MAP['local'], apiBaseUrl: LITELLM_PROXY_URL };
+      }
       if (MODEL_MAP[value]) {
-        return MODEL_MAP[value];
+        return { model: MODEL_MAP[value] };
       }
       // Allow full model IDs too
       if (value.startsWith('claude-')) {
-        return value;
+        return { model: value };
       }
     }
   } catch { /* use default */ }
-  return undefined;
+  return {};
 }
 
 const IPC_INPUT_DIR = '/workspace/ipc/input';
@@ -437,9 +449,16 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
-  const model = readModelConfig();
-  if (model) {
-    log(`Using model: ${model}`);
+  const modelConfig = readModelConfig();
+  if (modelConfig.model) {
+    log(`Using model: ${modelConfig.model}${modelConfig.apiBaseUrl ? ` via ${modelConfig.apiBaseUrl}` : ''}`);
+  }
+  if (modelConfig.apiBaseUrl) {
+    sdkEnv['ANTHROPIC_BASE_URL'] = modelConfig.apiBaseUrl;
+    // LiteLLM proxy needs an API key header but doesn't validate it
+    if (!sdkEnv['ANTHROPIC_API_KEY']) {
+      sdkEnv['ANTHROPIC_API_KEY'] = 'not-needed';
+    }
   }
 
   for await (const message of query({
@@ -447,7 +466,7 @@ async function runQuery(
     options: {
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
-      model,
+      model: modelConfig.model,
       resume: sessionId,
       resumeSessionAt: resumeAt,
       systemPrompt: globalClaudeMd

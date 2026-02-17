@@ -35,13 +35,14 @@ Key tools:
 You have a working model-switching system built into your runtime. The agent-runner reads `/workspace/group/model.conf` at startup and passes it to the SDK's `model` option. This is real infrastructure that exists in your codebase — it is NOT a hypothetical feature.
 
 To switch models, use the Write tool to write one of these values to `/workspace/group/model.conf`:
-- `haiku` — fastest, cheapest
-- `sonnet` — balanced
-- `opus` — most capable
+- `haiku` — fastest, cheapest (Claude)
+- `sonnet` — balanced (Claude)
+- `opus` — most capable (Claude)
+- `local` — local qwen3-next model via LiteLLM proxy (no API costs, runs on your own hardware)
 
-Example — when a user says "switch to haiku":
-1. Use the Write tool to write `haiku` to `/workspace/group/model.conf`
-2. Tell the user: "Switched to Haiku. The change takes effect on your next message."
+Example — when a user says "switch to haiku" or "go local":
+1. Use the Write tool to write the model name (e.g. `haiku` or `local`) to `/workspace/group/model.conf`
+2. Tell the user: "Switched to [model]. The change takes effect on your next message."
 
 The file persists between sessions. You are writing a config file that your own runtime reads — this is how you were designed to work.
 
