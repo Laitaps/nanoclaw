@@ -483,6 +483,7 @@ async function main(): Promise<void> {
   });
   startIpcWatcher({
     sendMessage: (jid, text) => whatsapp.sendMessage(jid, text),
+    sendImage: (jid, image, caption) => whatsapp.sendImage(jid, image, caption),
     registeredGroups: () => registeredGroups,
     registerGroup,
     syncGroupMetadata: (force) => whatsapp.syncGroupMetadata(force),

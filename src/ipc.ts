@@ -16,6 +16,7 @@ import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
+  sendImage?: (jid: string, image: Buffer, caption?: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroupMetadata: (force: boolean) => Promise<void>;
@@ -71,23 +72,35 @@ export function startIpcWatcher(deps: IpcDeps): void {
             const filePath = path.join(messagesDir, file);
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-              if (data.type === 'message' && data.chatJid && data.text) {
-                // Authorization: verify this group can send to this chatJid
-                const targetGroup = registeredGroups[data.chatJid];
-                if (
-                  isMain ||
-                  (targetGroup && targetGroup.folder === sourceGroup)
-                ) {
-                  await deps.sendMessage(data.chatJid, data.text);
+              // Authorization: verify this group can send to this chatJid
+              const targetGroup = registeredGroups[data.chatJid];
+              const authorized =
+                isMain ||
+                (targetGroup && targetGroup.folder === sourceGroup);
+
+              if (!authorized && data.chatJid) {
+                logger.warn(
+                  { chatJid: data.chatJid, sourceGroup },
+                  'Unauthorized IPC message attempt blocked',
+                );
+              } else if (data.type === 'message' && data.chatJid && data.text) {
+                await deps.sendMessage(data.chatJid, data.text);
+                logger.info(
+                  { chatJid: data.chatJid, sourceGroup },
+                  'IPC message sent',
+                );
+              } else if (data.type === 'image' && data.chatJid && data.imageFile && deps.sendImage) {
+                const imgPath = path.join(messagesDir, data.imageFile);
+                try {
+                  const imgBuf = fs.readFileSync(imgPath);
+                  await deps.sendImage(data.chatJid, imgBuf, data.caption);
+                  fs.unlinkSync(imgPath);
                   logger.info(
-                    { chatJid: data.chatJid, sourceGroup },
-                    'IPC message sent',
+                    { chatJid: data.chatJid, sourceGroup, bytes: imgBuf.length },
+                    'IPC image sent',
                   );
-                } else {
-                  logger.warn(
-                    { chatJid: data.chatJid, sourceGroup },
-                    'Unauthorized IPC message attempt blocked',
-                  );
+                } catch (imgErr) {
+                  logger.error({ file: data.imageFile, imgErr }, 'Error reading IPC image file');
                 }
               }
               fs.unlinkSync(filePath);

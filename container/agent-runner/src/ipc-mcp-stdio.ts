@@ -274,6 +274,63 @@ Use available_groups.json to find the JID for a group. The folder name should be
   },
 );
 
+server.tool(
+  'send_image',
+  'Send an image to the user or group. Accepts a local file path or a URL. For the research-assistant dashboard, use url="http://localhost:3000/api/dashboard.png".',
+  {
+    file_path: z.string().optional().describe('Path to an image file in the container (e.g., /workspace/group/chart.png)'),
+    url: z.string().optional().describe('URL to fetch the image from (e.g., http://localhost:3000/api/dashboard.png)'),
+    caption: z.string().optional().describe('Optional caption for the image'),
+  },
+  async (args) => {
+    if (!args.file_path && !args.url) {
+      return {
+        content: [{ type: 'text' as const, text: 'Must provide file_path or url.' }],
+        isError: true,
+      };
+    }
+
+    let imageBuffer: Buffer;
+    try {
+      if (args.url) {
+        const resp = await fetch(args.url);
+        if (!resp.ok) {
+          return {
+            content: [{ type: 'text' as const, text: `Failed to fetch image: ${resp.status} ${resp.statusText}` }],
+            isError: true,
+          };
+        }
+        imageBuffer = Buffer.from(await resp.arrayBuffer());
+      } else {
+        imageBuffer = fs.readFileSync(args.file_path!);
+      }
+    } catch (err) {
+      return {
+        content: [{ type: 'text' as const, text: `Error reading image: ${err instanceof Error ? err.message : String(err)}` }],
+        isError: true,
+      };
+    }
+
+    // Write binary image to IPC
+    fs.mkdirSync(MESSAGES_DIR, { recursive: true });
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const imageFile = `${id}.bin`;
+    fs.writeFileSync(path.join(MESSAGES_DIR, imageFile), imageBuffer);
+
+    // Write metadata JSON (IPC watcher picks this up)
+    writeIpcFile(MESSAGES_DIR, {
+      type: 'image',
+      chatJid,
+      imageFile,
+      caption: args.caption,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    return { content: [{ type: 'text' as const, text: 'Image sent.' }] };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);
