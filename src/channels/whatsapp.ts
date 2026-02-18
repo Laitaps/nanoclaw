@@ -226,7 +226,11 @@ export class WhatsAppChannel implements Channel {
       return;
     }
     try {
-      await this.sock.sendMessage(jid, { image, caption });
+      // Prefix caption like sendMessage does so the echo is detected as bot message
+      const prefixedCaption = caption
+        ? (ASSISTANT_HAS_OWN_NUMBER ? caption : `${ASSISTANT_NAME}: ${caption}`)
+        : undefined;
+      await this.sock.sendMessage(jid, { image, caption: prefixedCaption });
       logger.info({ jid, bytes: image.length, caption: caption?.slice(0, 50) }, 'Image sent');
     } catch (err) {
       logger.warn({ jid, err }, 'Failed to send image');
