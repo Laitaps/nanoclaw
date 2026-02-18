@@ -300,6 +300,13 @@ server.tool(
             isError: true,
           };
         }
+        const contentType = resp.headers.get('content-type') || '';
+        if (!contentType.startsWith('image/')) {
+          return {
+            content: [{ type: 'text' as const, text: `URL returned ${contentType} instead of an image. The server may be down or the URL may be wrong.` }],
+            isError: true,
+          };
+        }
         imageBuffer = Buffer.from(await resp.arrayBuffer());
       } else {
         imageBuffer = fs.readFileSync(args.file_path!);
