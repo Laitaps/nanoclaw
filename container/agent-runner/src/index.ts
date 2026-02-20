@@ -494,7 +494,9 @@ async function runQuery(
         'NotebookEdit',
         'mcp__nanoclaw__*',
         'mcp__research__*',
-        'mcp__mast__*'
+        'mcp__mast__*',
+        'mcp__viz__*',
+        'mcp__ai__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -517,6 +519,14 @@ async function runQuery(
         mast: {
           type: 'http',
           url: 'http://192.168.68.57:8001/mcp',
+        },
+        viz: {
+          type: 'http',
+          url: 'http://192.168.68.57:8002/mcp',
+        },
+        ai: {
+          type: 'http',
+          url: 'http://192.168.68.57:8003/mcp',
         },
       },
       hooks: {
