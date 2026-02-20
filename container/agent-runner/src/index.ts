@@ -493,7 +493,8 @@ async function runQuery(
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
-        'mcp__research__*'
+        'mcp__research__*',
+        'mcp__mast__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -512,6 +513,10 @@ async function runQuery(
         research: {
           type: 'http',
           url: 'http://192.168.68.57:8000/mcp',
+        },
+        mast: {
+          type: 'http',
+          url: 'http://192.168.68.57:8001/mcp',
         },
       },
       hooks: {
