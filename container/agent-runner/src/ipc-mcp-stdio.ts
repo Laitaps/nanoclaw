@@ -276,10 +276,10 @@ Use available_groups.json to find the JID for a group. The folder name should be
 
 server.tool(
   'send_image',
-  'Send an image to the user or group. Accepts a local file path or a URL. For the research-assistant dashboard, use url="http://localhost:3000/api/dashboard.png".',
+  'Send an image to the user or group. Accepts a local file path or a URL. For the research-assistant dashboard, use url="http://localhost:3000/api/dashboard.png". For science assets, use url="http://localhost:3000/api/assets/{id}/image?fmt=jpeg&w=1600" to send a compressed version suitable for messaging.',
   {
     file_path: z.string().optional().describe('Path to an image file in the container (e.g., /workspace/group/chart.png)'),
-    url: z.string().optional().describe('URL to fetch the image from (e.g., http://localhost:3000/api/dashboard.png)'),
+    url: z.string().optional().describe('URL to fetch the image from. For science assets, append ?fmt=jpeg&w=1600 for messaging-friendly size (e.g., http://localhost:3000/api/assets/4/image?fmt=jpeg&w=1600)'),
     caption: z.string().optional().describe('Optional caption for the image'),
   },
   async (args) => {
