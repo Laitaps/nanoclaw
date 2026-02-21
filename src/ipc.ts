@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { CronExpressionParser } from 'cron-parser';
+import sharp from 'sharp';
 
 import {
   DATA_DIR,
@@ -92,7 +93,32 @@ export function startIpcWatcher(deps: IpcDeps): void {
               } else if (data.type === 'image' && data.chatJid && data.imageFile && deps.sendImage) {
                 const imgPath = path.join(messagesDir, data.imageFile);
                 try {
-                  const imgBuf = fs.readFileSync(imgPath);
+                  let imgBuf = fs.readFileSync(imgPath);
+
+                  // Validate it's actually an image (check magic bytes)
+                  const isPng = imgBuf[0] === 0x89 && imgBuf[1] === 0x50;
+                  const isJpeg = imgBuf[0] === 0xFF && imgBuf[1] === 0xD8;
+                  const isWebp = imgBuf.length > 12 && imgBuf.slice(8, 12).toString() === 'WEBP';
+                  if (!isPng && !isJpeg && !isWebp) {
+                    logger.warn(
+                      { file: data.imageFile, bytes: imgBuf.length, head: imgBuf.slice(0, 20).toString('hex') },
+                      'IPC image file is not a valid image format, skipping',
+                    );
+                    fs.unlinkSync(imgPath);
+                    throw new Error('Invalid image format');
+                  }
+
+                  const MAX_IMAGE_BYTES = 1_000_000;
+                  if (imgBuf.length > MAX_IMAGE_BYTES) {
+                    logger.info(
+                      { originalBytes: imgBuf.length },
+                      'Compressing large image for messaging',
+                    );
+                    imgBuf = Buffer.from(await sharp(imgBuf)
+                      .resize(1600, 1600, { fit: 'inside', withoutEnlargement: true })
+                      .jpeg({ quality: 85 })
+                      .toBuffer());
+                  }
                   await deps.sendImage(data.chatJid, imgBuf, data.caption);
                   fs.unlinkSync(imgPath);
                   logger.info(
