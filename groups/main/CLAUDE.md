@@ -101,15 +101,53 @@ When you learn something important:
 - Split files larger than 500 lines into folders
 - Keep an index in your memory for the files you create
 
-## WhatsApp Formatting (and other messaging apps)
+## Formatting
 
-Do NOT use markdown headings (##) in WhatsApp messages. Only use:
-- *Bold* (single asterisks) (NEVER **double asterisks**)
-- _Italic_ (underscores)
-- • Bullets (bullet points)
-- ```Code blocks``` (triple backticks)
+Output is rendered in a React dashboard with full Markdown support. Use:
+- **Bold** (double asterisks)
+- *Italic* (single asterisks)
+- ## Headings (when appropriate for structure)
+- Bulleted and numbered lists
+- `inline code` and fenced code blocks
+- > Blockquotes
+- [Links](url)
+- Tables (GFM format)
 
-Keep messages clean and readable for WhatsApp.
+The dashboard renders GitHub-Flavored Markdown, KaTeX math, and Graphviz DOT diagrams.
+
+### LaTeX / Math Equations
+
+When outputting math equations, ALWAYS use standard LaTeX delimiters:
+- Inline math: `$...$` (e.g. `$E = mc^2$`)
+- Display math: `$$...$$` (e.g. `$$\frac{a}{b}$$`)
+
+NEVER output bare LaTeX without delimiters. NEVER put LaTeX inside code blocks.
+The dashboard renders math using KaTeX, which requires `$` or `$$` delimiters.
+
+### Flowcharts & Diagrams
+
+When producing flowcharts, state diagrams, or any directed/undirected graphs, ALWAYS use Graphviz DOT format inside a ` ```dot ` fenced code block. The dashboard renders these as interactive SVG diagrams.
+
+ALWAYS use these default style attributes for dark-theme readability:
+
+```dot
+digraph {
+  bgcolor="transparent"
+  node [shape=box style="rounded,filled" fillcolor="#1a3a5c" fontcolor="white" fontname="sans-serif" fontsize=13 color="#90caf9"]
+  edge [color="#90caf9" fontcolor="#cccccc" fontname="sans-serif" fontsize=11]
+
+  A [label="Start"]
+  B [label="Step"]
+  A -> B
+}
+```
+
+Rules:
+- Use `digraph` for directed graphs, `graph` for undirected
+- Keep node labels short (wrap long text with `\n`)
+- Use `rankdir=LR` for wide horizontal flows, default `TB` for vertical
+- For decision nodes use `shape=diamond`
+- NEVER describe a flowchart in text when you can draw it in DOT
 
 ---
 

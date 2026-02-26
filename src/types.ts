@@ -50,6 +50,8 @@ export interface NewMessage {
   timestamp: string;
   is_from_me?: boolean;
   is_bot_message?: boolean;
+  media_type?: string;   // "image/png", "image/jpeg", "image/webp"
+  media_blob?: Buffer;   // raw image bytes
 }
 
 export interface ScheduledTask {

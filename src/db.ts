@@ -99,6 +99,14 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add media columns for inline images (migration for existing DBs)
+  try {
+    database.exec(`ALTER TABLE messages ADD COLUMN media_type TEXT`);
+  } catch { /* column already exists */ }
+  try {
+    database.exec(`ALTER TABLE messages ADD COLUMN media_blob BLOB`);
+  } catch { /* column already exists */ }
+
   // Migrate sessions table to support per-family sessions (composite primary key)
   try {
     // Check if model_family column exists
@@ -233,7 +241,7 @@ export function setLastGroupSync(): void {
  */
 export function storeMessage(msg: NewMessage): void {
   db.prepare(
-    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, media_type, media_blob) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     msg.id,
     msg.chat_jid,
@@ -243,6 +251,8 @@ export function storeMessage(msg: NewMessage): void {
     msg.timestamp,
     msg.is_from_me ? 1 : 0,
     msg.is_bot_message ? 1 : 0,
+    msg.media_type || null,
+    msg.media_blob || null,
   );
 }
 
@@ -258,9 +268,11 @@ export function storeMessageDirect(msg: {
   timestamp: string;
   is_from_me: boolean;
   is_bot_message?: boolean;
+  media_type?: string;
+  media_blob?: Buffer;
 }): void {
   db.prepare(
-    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO messages (id, chat_jid, sender, sender_name, content, timestamp, is_from_me, is_bot_message, media_type, media_blob) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     msg.id,
     msg.chat_jid,
@@ -270,6 +282,8 @@ export function storeMessageDirect(msg: {
     msg.timestamp,
     msg.is_from_me ? 1 : 0,
     msg.is_bot_message ? 1 : 0,
+    msg.media_type || null,
+    msg.media_blob || null,
   );
 }
 

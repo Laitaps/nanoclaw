@@ -5,13 +5,14 @@ import { CronExpressionParser } from 'cron-parser';
 import sharp from 'sharp';
 
 import {
+  ASSISTANT_NAME,
   DATA_DIR,
   IPC_POLL_INTERVAL,
   MAIN_GROUP_FOLDER,
   TIMEZONE,
 } from './config.js';
 import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
+import { createTask, deleteTask, getTaskById, storeMessage, updateTask } from './db.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
 
@@ -90,7 +91,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   { chatJid: data.chatJid, sourceGroup },
                   'IPC message sent',
                 );
-              } else if (data.type === 'image' && data.chatJid && data.imageFile && deps.sendImage) {
+              } else if (data.type === 'image' && data.chatJid && data.imageFile) {
                 const imgPath = path.join(messagesDir, data.imageFile);
                 try {
                   let imgBuf = fs.readFileSync(imgPath);
@@ -119,11 +120,39 @@ export function startIpcWatcher(deps: IpcDeps): void {
                       .jpeg({ quality: 85 })
                       .toBuffer());
                   }
-                  await deps.sendImage(data.chatJid, imgBuf, data.caption);
+
+                  // Detect MIME type from magic bytes after compression
+                  let mediaType = 'image/png';
+                  if (imgBuf[0] === 0xFF && imgBuf[1] === 0xD8) mediaType = 'image/jpeg';
+                  else if (imgBuf.length > 12 && imgBuf.slice(8, 12).toString() === 'WEBP') mediaType = 'image/webp';
+                  else if (imgBuf[0] === 0x89 && imgBuf[1] === 0x50) mediaType = 'image/png';
+
+                  // Always store image in SQLite for dashboard display
+                  const caption = data.caption || '';
+                  const content = caption
+                    ? `${ASSISTANT_NAME}: ${caption}`
+                    : `${ASSISTANT_NAME}: [image]`;
+                  storeMessage({
+                    id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                    chat_jid: data.chatJid,
+                    sender: ASSISTANT_NAME.toLowerCase(),
+                    sender_name: ASSISTANT_NAME,
+                    content,
+                    timestamp: new Date().toISOString(),
+                    is_from_me: true,
+                    is_bot_message: true,
+                    media_type: mediaType,
+                    media_blob: imgBuf,
+                  });
+
+                  // Send via WhatsApp if available
+                  if (deps.sendImage) {
+                    await deps.sendImage(data.chatJid, imgBuf, data.caption);
+                  }
                   fs.unlinkSync(imgPath);
                   logger.info(
                     { chatJid: data.chatJid, sourceGroup, bytes: imgBuf.length },
-                    'IPC image sent',
+                    'IPC image stored and sent',
                   );
                 } catch (imgErr) {
                   logger.error({ file: data.imageFile, imgErr }, 'Error reading IPC image file');

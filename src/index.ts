@@ -10,7 +10,9 @@ import {
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
   TRIGGER_PATTERN,
+  WHATSAPP_ENABLED,
 } from './config.js';
+import { NullChannel } from './channels/null.js';
 import { WhatsAppChannel } from './channels/whatsapp.js';
 import {
   ContainerOutput,
@@ -63,7 +65,7 @@ function getModelFamily(groupFolder: string): string {
   }
 }
 
-let whatsapp: WhatsAppChannel;
+let whatsapp: WhatsAppChannel | NullChannel;
 const queue = new GroupQueue();
 
 function loadState(): void {
@@ -185,9 +187,23 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (result.result) {
       const raw = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
       // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+      // Lenient closing tag: matches </internal>, </interactive>, </intern>, etc.
+      const text = raw.replace(/<internal>[\s\S]*?<\/inter\w*>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
       if (text) {
+        // Always record the bot reply in the DB so dashboard chat works
+        // even when WhatsApp is disconnected.
+        const prefixed = `${ASSISTANT_NAME}: ${text}`;
+        storeMessage({
+          id: `bot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          chat_jid: chatJid,
+          sender: ASSISTANT_NAME.toLowerCase(),
+          sender_name: ASSISTANT_NAME,
+          content: prefixed,
+          timestamp: new Date().toISOString(),
+          is_from_me: true,
+          is_bot_message: true,
+        });
         await whatsapp.sendMessage(chatJid, text);
         outputSentToUser = true;
       }
@@ -460,15 +476,23 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 
-  // Create WhatsApp channel
-  whatsapp = new WhatsAppChannel({
-    onMessage: (chatJid, msg) => storeMessage(msg),
-    onChatMetadata: (chatJid, timestamp) => storeChatMetadata(chatJid, timestamp),
-    registeredGroups: () => registeredGroups,
-  });
+  // Create channel (WhatsApp or no-op null channel)
+  if (WHATSAPP_ENABLED) {
+    whatsapp = new WhatsAppChannel({
+      onMessage: (chatJid, msg) => storeMessage(msg),
+      onChatMetadata: (chatJid, timestamp) => storeChatMetadata(chatJid, timestamp),
+      registeredGroups: () => registeredGroups,
+    });
 
-  // Connect — resolves when first connected
-  await whatsapp.connect();
+    // Connect — don't block on it so subsystems (message loop, scheduler)
+    // can run even when WhatsApp is down (e.g. dashboard chat still works).
+    whatsapp.connect().catch((err) => {
+      logger.error({ err }, 'WhatsApp connect failed');
+    });
+  } else {
+    logger.info('WhatsApp disabled — using null channel (dashboard-only mode)');
+    whatsapp = new NullChannel();
+  }
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
