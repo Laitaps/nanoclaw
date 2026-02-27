@@ -10,10 +10,8 @@ import {
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
   TRIGGER_PATTERN,
-  WHATSAPP_ENABLED,
 } from './config.js';
 import { NullChannel } from './channels/null.js';
-import { WhatsAppChannel } from './channels/whatsapp.js';
 import {
   ContainerOutput,
   runContainerAgent,
@@ -32,7 +30,6 @@ import {
   setRegisteredGroup,
   setRouterState,
   setSession,
-  storeChatMetadata,
   storeMessage,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
@@ -65,7 +62,7 @@ function getModelFamily(groupFolder: string): string {
   }
 }
 
-let whatsapp: WhatsAppChannel | NullChannel;
+let whatsapp: NullChannel;
 const queue = new GroupQueue();
 
 function loadState(): void {
@@ -476,23 +473,7 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 
-  // Create channel (WhatsApp or no-op null channel)
-  if (WHATSAPP_ENABLED) {
-    whatsapp = new WhatsAppChannel({
-      onMessage: (chatJid, msg) => storeMessage(msg),
-      onChatMetadata: (chatJid, timestamp) => storeChatMetadata(chatJid, timestamp),
-      registeredGroups: () => registeredGroups,
-    });
-
-    // Connect — don't block on it so subsystems (message loop, scheduler)
-    // can run even when WhatsApp is down (e.g. dashboard chat still works).
-    whatsapp.connect().catch((err) => {
-      logger.error({ err }, 'WhatsApp connect failed');
-    });
-  } else {
-    logger.info('WhatsApp disabled — using null channel (dashboard-only mode)');
-    whatsapp = new NullChannel();
-  }
+  whatsapp = new NullChannel();
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
