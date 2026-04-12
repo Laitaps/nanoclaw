@@ -30,11 +30,13 @@ export interface SchedulerDependencies {
   sendMessage: (jid: string, text: string) => Promise<void>;
 }
 
+const LOCAL_MODEL_FAMILIES = new Set(['local']);
+
 function getModelFamily(groupFolder: string): string {
   const modelConfPath = path.join(GROUPS_DIR, groupFolder, 'model.conf');
   try {
     const value = fs.readFileSync(modelConfPath, 'utf-8').trim().toLowerCase();
-    return value === 'local' ? 'local' : 'claude';
+    return LOCAL_MODEL_FAMILIES.has(value) ? 'local' : 'claude';
   } catch {
     return 'claude';
   }

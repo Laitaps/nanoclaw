@@ -40,6 +40,10 @@ ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 # Install agent-browser and claude-code globally
 RUN npm install -g agent-browser @anthropic-ai/claude-code
 
+# Install Goose CLI (for non-Claude models — provides tool calling,
+# file ops, bash, web fetch, MCP, and context compaction)
+RUN curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash
+
 # Create app directory
 WORKDIR /app
 
