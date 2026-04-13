@@ -1,4 +1,3 @@
-import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -238,10 +237,6 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
-    // For approve_pr / reject_pr
-    repo?: string;
-    pr_number?: number;
-    comment?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -446,103 +441,8 @@ export async function processTaskIpc(
       }
       break;
 
-    case 'approve_pr':
-      if (!isMain) {
-        logger.warn({ sourceGroup }, 'Unauthorized approve_pr attempt blocked');
-        break;
-      }
-      if (data.repo && data.pr_number) {
-        await handleApprovePr(data.repo, data.pr_number, data.comment || 'Approved.', deps);
-      }
-      break;
-
-    case 'reject_pr':
-      if (!isMain) {
-        logger.warn({ sourceGroup }, 'Unauthorized reject_pr attempt blocked');
-        break;
-      }
-      if (data.repo && data.pr_number && data.comment) {
-        await handleRejectPr(data.repo, data.pr_number, data.comment, deps);
-      }
-      break;
-
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');
   }
 }
 
-async function handleApprovePr(
-  repo: string, prNumber: number, comment: string, deps: IpcDeps,
-): Promise<void> {
-  const token = process.env.SKIPPY_APPROVAL_TOKEN;
-  const ghToken = process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.GH_TOKEN;
-
-  if (!token) {
-    logger.error('SKIPPY_APPROVAL_TOKEN not set — cannot approve PRs');
-    return;
-  }
-  if (!ghToken) {
-    logger.error('No GitHub token available for PR operations');
-    return;
-  }
-
-  try {
-    // Get the PR head SHA
-    const prInfo = execSync(
-      `GH_TOKEN="${ghToken}" gh pr view ${prNumber} --repo ${repo} --json headRefOid --jq .headRefOid`,
-      { encoding: 'utf-8', timeout: 15000 },
-    ).trim();
-
-    if (!prInfo) {
-      logger.error({ repo, prNumber }, 'Could not get PR head SHA');
-      return;
-    }
-
-    // Set the skippy/approved commit status
-    execSync(
-      `GH_TOKEN="${ghToken}" gh api repos/${repo}/statuses/${prInfo} ` +
-        `-f state=success -f context=skippy/approved ` +
-        `-f description="Approved by Skippy (token-verified)"`,
-      { encoding: 'utf-8', timeout: 15000 },
-    );
-    logger.info({ repo, prNumber, sha: prInfo }, 'Set skippy/approved commit status');
-
-    // Leave a signed comment
-    const signedComment = `${comment}\n\n— **Skippy** ✅ (merge-gate verified)`;
-    execSync(
-      `GH_TOKEN="${ghToken}" gh pr comment ${prNumber} --repo ${repo} --body ${JSON.stringify(signedComment)}`,
-      { encoding: 'utf-8', timeout: 15000 },
-    );
-
-    // Merge the PR
-    execSync(
-      `GH_TOKEN="${ghToken}" gh pr merge ${prNumber} --repo ${repo} --squash --auto`,
-      { encoding: 'utf-8', timeout: 15000 },
-    );
-    logger.info({ repo, prNumber }, 'PR approved and auto-merge enabled');
-  } catch (err) {
-    logger.error({ repo, prNumber, err }, 'Failed to approve/merge PR');
-  }
-}
-
-async function handleRejectPr(
-  repo: string, prNumber: number, comment: string, deps: IpcDeps,
-): Promise<void> {
-  const ghToken = process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.GH_TOKEN;
-
-  if (!ghToken) {
-    logger.error('No GitHub token available for PR operations');
-    return;
-  }
-
-  try {
-    const signedComment = `${comment}\n\n— **Skippy** ❌ (changes requested)`;
-    execSync(
-      `GH_TOKEN="${ghToken}" gh pr comment ${prNumber} --repo ${repo} --body ${JSON.stringify(signedComment)}`,
-      { encoding: 'utf-8', timeout: 15000 },
-    );
-    logger.info({ repo, prNumber }, 'PR changes requested');
-  } catch (err) {
-    logger.error({ repo, prNumber, err }, 'Failed to comment on PR');
-  }
-}

@@ -62,6 +62,8 @@ const LOCAL_MODEL_FAMILIES = new Set(['local']);
 const GOOSE_IMAGE = 'ghcr.io/block/goose@sha256:f92c0b5fa49ba6e96820535d9ac331781721a2cb4593d73ff6d15a51a4c75c13';
 
 // Research assistant host — all MCP and API URLs derive from this
+// For Goose containers (--network host): use the host's real IP so MCP
+// URLs are reachable.  host.docker.internal doesn't resolve on host network.
 const RESEARCH_HOST = process.env.RESEARCH_HOST || 'http://192.168.68.57';
 const MCP_RESEARCH_URL = `${RESEARCH_HOST}:8000/mcp`;
 const DASHBOARD_API_URL = `${RESEARCH_HOST}:3000/api`;
@@ -444,6 +446,9 @@ async function runGooseAgent(
         { group: group.name, containerName, code, resultLen: result.length, resultPreview: result.slice(0, 200), stdoutLen: stdout.length, stderrLen: stderr.length },
         'Goose container finished',
       );
+      if (stderr.length > 0) {
+        logger.info({ group: group.name, stderr: stderr.slice(0, 2000) }, 'Goose stderr');
+      }
 
       if (code !== 0 && !result) {
         resolve({
