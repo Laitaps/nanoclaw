@@ -297,13 +297,23 @@ async function runGooseAgent(
     '-t', prompt,
   ];
 
-  // Capture prompt_tokens_total before the request to compute delta after
+  // Capture prompt_tokens_total before the request to compute delta after.
+  // Also store the baseline in the dashboard DB so the slot-status endpoint
+  // can compute live context usage during inference (not just after).
   let baselinePromptTokens = 0;
   try {
     const metricsResp = await fetch(`${endpoint}/metrics`, { signal: AbortSignal.timeout(3000) });
     const metricsText = await metricsResp.text();
     const match = metricsText.match(/llamacpp:prompt_tokens_total\s+(\d+)/);
-    if (match) baselinePromptTokens = parseInt(match[1]);
+    if (match) {
+      baselinePromptTokens = parseInt(match[1]);
+      await fetch(`${DASHBOARD_API_URL}/chat/session-ctx`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseline: baselinePromptTokens }),
+        signal: AbortSignal.timeout(3000),
+      }).catch(() => {});
+    }
   } catch { /* ignore — we'll just skip context tracking */ }
 
   return new Promise<ContainerOutput>((resolve) => {
