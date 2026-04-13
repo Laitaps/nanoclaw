@@ -37,6 +37,10 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
+# Install GitHub CLI for PR operations
+COPY gh_2.89.0_linux_amd64.tar.gz /tmp/gh.tar.gz
+RUN tar -xzf /tmp/gh.tar.gz -C /usr/local --strip-components=1 && rm /tmp/gh.tar.gz
+
 # Install agent-browser and claude-code globally
 RUN npm install -g agent-browser @anthropic-ai/claude-code
 

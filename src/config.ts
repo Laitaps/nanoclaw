@@ -18,6 +18,16 @@ export const SCHEDULER_POLL_INTERVAL = 60000;
 const PROJECT_ROOT = process.cwd();
 const HOME_DIR = process.env.HOME || '/Users/user';
 
+// When running inside Docker, sibling containers need host paths for volume
+// mounts (Docker resolves -v paths against the host, not the calling container).
+// NANOCLAW_HOST_PROJECT_ROOT maps the in-container PROJECT_ROOT to the host.
+// When running inside Docker, sibling containers need host paths for volume
+// mounts (Docker resolves -v paths against the host, not the calling container).
+// NANOCLAW_HOST_PROJECT_ROOT maps the in-container PROJECT_ROOT to the host.
+export const HOST_PROJECT_ROOT = process.env.NANOCLAW_HOST_PROJECT_ROOT || PROJECT_ROOT;
+export const HOST_GROUPS_DIR = path.resolve(HOST_PROJECT_ROOT, 'groups');
+export const HOST_DATA_DIR = path.resolve(HOST_PROJECT_ROOT, 'data');
+
 // Mount security: allowlist stored OUTSIDE project root, never mounted into containers
 export const MOUNT_ALLOWLIST_PATH = path.join(
   HOME_DIR,

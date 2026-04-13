@@ -6,6 +6,7 @@ import {
   ASSISTANT_NAME,
   DATA_DIR,
   GROUPS_DIR,
+  HOST_GROUPS_DIR,
   IDLE_TIMEOUT,
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
@@ -241,8 +242,19 @@ async function runGooseAgent(
   const gooseDataDir = path.join(GROUPS_DIR, group.folder, 'goose');
   const gooseShareDir = path.join(gooseDataDir, 'share');
   const gooseStateDir = path.join(gooseDataDir, 'state');
-  fs.mkdirSync(gooseShareDir, { recursive: true });
-  fs.mkdirSync(gooseStateDir, { recursive: true });
+  fs.mkdirSync(gooseShareDir, { recursive: true, mode: 0o777 });
+  fs.mkdirSync(gooseStateDir, { recursive: true, mode: 0o777 });
+  // Ensure writable by Goose (uid 1000) even when orchestrator runs as root
+  for (const d of [gooseDataDir, gooseShareDir, gooseStateDir]) {
+    try { fs.chmodSync(d, 0o777); } catch { /* best effort */ }
+  }
+
+  // Host paths for sibling container volume mounts (Docker resolves -v
+  // against the host filesystem, not the calling container)
+  const hostGroupDir = path.join(HOST_GROUPS_DIR, group.folder);
+  const hostGooseDataDir = path.join(hostGroupDir, 'goose');
+  const hostGooseShareDir = path.join(hostGooseDataDir, 'share');
+  const hostGooseStateDir = path.join(hostGooseDataDir, 'state');
 
   // Check if a prior session exists so we can resume it
   const hasExistingSession = fs.existsSync(path.join(gooseShareDir, 'sessions', 'sessions.db'));
@@ -259,13 +271,13 @@ async function runGooseAgent(
     '-e', `GOOSE_AUTO_COMPACT_THRESHOLD=${compactThreshold}`,
     '-e', 'GOOSE_TOOL_PAIR_SUMMARIZATION=true',
     // Mount group directory for file access
-    '-v', `${groupDir}:/workspace/group`,
+    '-v', `${hostGroupDir}:/workspace/group`,
     '-w', '/workspace/group',
     // Mount tool-images output directory
     '-v', `${path.resolve('dashboard/dist/tool-images')}:/workspace/tool-images`,
     // Persistent Goose session storage
-    '-v', `${gooseShareDir}:/home/goose/.local/share/goose`,
-    '-v', `${gooseStateDir}:/home/goose/.local/state/goose`,
+    '-v', `${hostGooseShareDir}:/home/goose/.local/share/goose`,
+    '-v', `${hostGooseStateDir}:/home/goose/.local/state/goose`,
     GOOSE_IMAGE,
     'run',
     '--no-profile',
@@ -981,9 +993,11 @@ function ensureDockerRunning(): void {
     throw new Error('Docker is required but not running');
   }
 
-  // Kill and clean up orphaned NanoClaw containers from previous runs
+  // Kill and clean up orphaned NanoClaw agent containers from previous runs.
+  // Agent containers are named nanoclaw-{group}-{ts} by container-runner.
+  // Use ^nanoclaw- regex to avoid matching the orchestrator (research_assistant-nanoclaw-1).
   try {
-    const output = execSync('docker ps --filter "name=nanoclaw-" --format "{{.Names}}"', {
+    const output = execSync('docker ps --filter "name=^nanoclaw-" --format "{{.Names}}"', {
       stdio: ['pipe', 'pipe', 'pipe'],
       encoding: 'utf-8',
     });

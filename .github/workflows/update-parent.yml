@@ -1,0 +1,32 @@
+name: Update parent submodule
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  update-submodule:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout research-assistant
+        uses: actions/checkout@v4
+        with:
+          repository: Laitaps/research-assistant
+          token: ${{ secrets.PARENT_REPO_TOKEN }}
+          submodules: true
+
+      - name: Update nanoclaw submodule to latest main
+        run: |
+          cd nanoclaw
+          git fetch origin main
+          git checkout origin/main
+          cd ..
+          git add nanoclaw
+          if git diff --cached --quiet; then
+            echo "Submodule already up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: update nanoclaw submodule to $(cd nanoclaw && git rev-parse --short HEAD)"
+          git push

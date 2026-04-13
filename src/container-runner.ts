@@ -13,6 +13,9 @@ import {
   CONTAINER_TIMEOUT,
   DATA_DIR,
   GROUPS_DIR,
+  HOST_DATA_DIR,
+  HOST_GROUPS_DIR,
+  HOST_PROJECT_ROOT,
   IDLE_TIMEOUT,
 } from './config.js';
 import { readEnvFile } from './env.js';
@@ -70,21 +73,21 @@ function buildVolumeMounts(
   if (isMain) {
     // Main gets the entire project root mounted
     mounts.push({
-      hostPath: projectRoot,
+      hostPath: HOST_PROJECT_ROOT,
       containerPath: '/workspace/project',
       readonly: false,
     });
 
     // Main also gets its group folder as the working directory
     mounts.push({
-      hostPath: path.join(GROUPS_DIR, group.folder),
+      hostPath: path.join(HOST_GROUPS_DIR, group.folder),
       containerPath: '/workspace/group',
       readonly: false,
     });
   } else {
     // Other groups only get their own folder
     mounts.push({
-      hostPath: path.join(GROUPS_DIR, group.folder),
+      hostPath: path.join(HOST_GROUPS_DIR, group.folder),
       containerPath: '/workspace/group',
       readonly: false,
     });
@@ -94,7 +97,7 @@ function buildVolumeMounts(
     const globalDir = path.join(GROUPS_DIR, 'global');
     if (fs.existsSync(globalDir)) {
       mounts.push({
-        hostPath: globalDir,
+        hostPath: path.join(HOST_GROUPS_DIR, 'global'),
         containerPath: '/workspace/global',
         readonly: true,
       });
@@ -143,8 +146,15 @@ function buildVolumeMounts(
       }
     }
   }
+  // Host path for Docker volume mount
+  const hostGroupSessionsDir = path.join(
+    HOST_DATA_DIR,
+    'sessions',
+    group.folder,
+    '.claude',
+  );
   mounts.push({
-    hostPath: groupSessionsDir,
+    hostPath: hostGroupSessionsDir,
     containerPath: '/home/node/.claude',
     readonly: false,
   });
@@ -155,15 +165,16 @@ function buildVolumeMounts(
   fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
+  const hostGroupIpcDir = path.join(HOST_DATA_DIR, 'ipc', group.folder);
   mounts.push({
-    hostPath: groupIpcDir,
+    hostPath: hostGroupIpcDir,
     containerPath: '/workspace/ipc',
     readonly: false,
   });
 
   // Mount agent-runner source from host — recompiled on container startup.
   // Ensures code changes are picked up without rebuilding the image.
-  const agentRunnerSrc = path.join(projectRoot, 'container', 'agent-runner', 'src');
+  const agentRunnerSrc = path.join(HOST_PROJECT_ROOT, 'container', 'agent-runner', 'src');
   mounts.push({
     hostPath: agentRunnerSrc,
     containerPath: '/app/src',

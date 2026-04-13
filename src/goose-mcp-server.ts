@@ -355,6 +355,70 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
       };
     },
   );
+
+  server.tool(
+    'approve_pr',
+    'Approve a pull request and merge it. Sets the skippy/approved commit status ' +
+      'and merges via GitHub. Main group only — only Skippy can approve PRs.',
+    {
+      repo: z.string().describe('Repository in owner/repo format (e.g., "Laitaps/nanoclaw")'),
+      pr_number: z.number().describe('The PR number to approve'),
+      comment: z.string().optional().describe('Approval comment to leave on the PR'),
+    },
+    async (args) => {
+      if (!isMain) {
+        return {
+          content: [{ type: 'text' as const, text: 'Only the main group (Skippy) can approve PRs.' }],
+          isError: true,
+        };
+      }
+      writeIpcFile(tasksDir, {
+        type: 'approve_pr',
+        repo: args.repo,
+        pr_number: args.pr_number,
+        comment: args.comment || 'Approved.',
+        groupFolder,
+        timestamp: new Date().toISOString(),
+      });
+      return {
+        content: [
+          { type: 'text' as const, text: `PR #${args.pr_number} approval requested. Will set commit status and merge.` },
+        ],
+      };
+    },
+  );
+
+  server.tool(
+    'reject_pr',
+    'Request changes on a pull request. Leaves a review comment explaining what ' +
+      'needs to change. Main group only — only Skippy can reject PRs.',
+    {
+      repo: z.string().describe('Repository in owner/repo format (e.g., "Laitaps/nanoclaw")'),
+      pr_number: z.number().describe('The PR number to request changes on'),
+      comment: z.string().describe('What needs to change and why'),
+    },
+    async (args) => {
+      if (!isMain) {
+        return {
+          content: [{ type: 'text' as const, text: 'Only the main group (Skippy) can reject PRs.' }],
+          isError: true,
+        };
+      }
+      writeIpcFile(tasksDir, {
+        type: 'reject_pr',
+        repo: args.repo,
+        pr_number: args.pr_number,
+        comment: args.comment,
+        groupFolder,
+        timestamp: new Date().toISOString(),
+      });
+      return {
+        content: [
+          { type: 'text' as const, text: `Requested changes on PR #${args.pr_number}.` },
+        ],
+      };
+    },
+  );
 }
 
 /**

@@ -774,6 +774,18 @@ async function main(): Promise<void> {
     sdkEnv[key] = value;
   }
 
+  // Expose GH_TOKEN to the shell so git push and gh CLI work for the Architect.
+  // Uses the OAuth token (same identity as the user). SKIPPY_APPROVAL_TOKEN is
+  // never passed to agent containers, so agents cannot approve their own PRs.
+  if (sdkEnv.CLAUDE_CODE_OAUTH_TOKEN) {
+    process.env.GH_TOKEN = sdkEnv.CLAUDE_CODE_OAUTH_TOKEN;
+    // Also configure git to use the token for HTTPS pushes
+    process.env.GIT_ASKPASS = '/bin/true';
+    process.env.GIT_CONFIG_COUNT = '1';
+    process.env.GIT_CONFIG_KEY_0 = 'url.https://oauth2:' + sdkEnv.CLAUDE_CODE_OAUTH_TOKEN + '@github.com/.insteadOf';
+    process.env.GIT_CONFIG_VALUE_0 = 'git@github.com:';
+  }
+
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
 
