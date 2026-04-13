@@ -12,6 +12,7 @@
 import { createServer, IncomingMessage, Server, ServerResponse } from 'http';
 import { randomUUID } from 'crypto';
 import fs from 'fs';
+import { networkInterfaces } from 'os';
 import path from 'path';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -527,9 +528,24 @@ export async function startGooseMcpServer(config: GooseMcpConfig): Promise<Goose
 
   return new Promise((resolve, reject) => {
     httpServer.on('error', reject);
-    httpServer.listen(0, '127.0.0.1', () => {
+    // Listen on 0.0.0.0 so Goose containers (running with --network host)
+    // can reach this server via the nanoclaw container's bridge IP.
+    httpServer.listen(0, '0.0.0.0', () => {
       const addr = httpServer.address() as { port: number };
-      const url = `http://127.0.0.1:${addr.port}/mcp`;
+      // Use container IP for the URL since Goose runs on host network.
+      // Fall back to 127.0.0.1 when running directly on the host.
+      let containerIp = '127.0.0.1';
+      const nets = networkInterfaces();
+      for (const iface of Object.values(nets)) {
+        for (const cfg of (iface || [])) {
+          if (cfg.family === 'IPv4' && !cfg.internal) {
+            containerIp = cfg.address;
+            break;
+          }
+        }
+        if (containerIp !== '127.0.0.1') break;
+      }
+      const url = `http://${containerIp}:${addr.port}/mcp`;
       logger.info({ port: addr.port, url, group: config.groupFolder }, 'Goose MCP server started');
       resolve({
         port: addr.port,
