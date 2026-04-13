@@ -57,7 +57,8 @@ let messageLoopRunning = false;
  */
 const LOCAL_MODEL_FAMILIES = new Set(['local']);
 
-const GOOSE_IMAGE = 'ghcr.io/block/goose:latest';
+// Pinned to 2026-03-31 build — update digest intentionally, not via :latest drift
+const GOOSE_IMAGE = 'ghcr.io/block/goose@sha256:f92c0b5fa49ba6e96820535d9ac331781721a2cb4593d73ff6d15a51a4c75c13';
 
 // Research assistant host — all MCP and API URLs derive from this
 const RESEARCH_HOST = process.env.RESEARCH_HOST || 'http://192.168.68.57';
