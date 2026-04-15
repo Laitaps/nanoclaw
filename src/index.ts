@@ -299,24 +299,42 @@ async function runGooseAgent(
     '-t', prompt,
   ];
 
-  // Capture prompt_tokens_total before the request to compute delta after.
-  // Also store the baseline in the dashboard DB so the slot-status endpoint
-  // can compute live context usage during inference (not just after).
-  let baselinePromptTokens = 0;
+  // Track current slot context by polling prompt_tokens_total and recording
+  // the most recent "jump". Each LLM request increments this counter by its
+  // prompt size, so the last jump equals the most recent call's prompt =
+  // current slot context. Cumulative delta would over-report by Nx for an
+  // N-tool-call session because each iteration re-sends the full conversation.
+  let lastObservedPromptTotal = 0;
+  let lastJump = 0;
   try {
     const metricsResp = await fetch(`${endpoint}/metrics`, { signal: AbortSignal.timeout(3000) });
     const metricsText = await metricsResp.text();
     const match = metricsText.match(/llamacpp:prompt_tokens_total\s+(\d+)/);
     if (match) {
-      baselinePromptTokens = parseInt(match[1]);
-      await fetch(`${DASHBOARD_API_URL}/chat/session-ctx`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ baseline: baselinePromptTokens }),
-        signal: AbortSignal.timeout(3000),
-      }).catch(() => {});
+      lastObservedPromptTotal = parseInt(match[1]);
     }
   } catch { /* ignore — we'll just skip context tracking */ }
+
+  const samplePromptTotal = async (): Promise<void> => {
+    try {
+      const resp = await fetch(`${endpoint}/metrics`, { signal: AbortSignal.timeout(2000) });
+      const text = await resp.text();
+      const m = text.match(/llamacpp:prompt_tokens_total\s+(\d+)/);
+      if (!m) return;
+      const v = parseInt(m[1]);
+      const delta = v - lastObservedPromptTotal;
+      if (delta > 0) {
+        lastJump = delta;
+        await fetch(`${DASHBOARD_API_URL}/chat/session-ctx`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ctx_used: lastJump }),
+          signal: AbortSignal.timeout(2000),
+        }).catch(() => {});
+      }
+      lastObservedPromptTotal = v;
+    } catch { /* ignore */ }
+  };
 
   return new Promise<ContainerOutput>((resolve) => {
     let stdout = '';
@@ -324,6 +342,10 @@ async function runGooseAgent(
 
     const proc = spawn('docker', args);
     logger.info({ group: group.name, containerName }, 'Spawning Goose container');
+
+    // Poll for prompt_tokens_total jumps every 500ms while Goose runs. Each
+    // jump = one LLM call's prompt size; the latest jump = current slot fill.
+    const ctxPollHandle = setInterval(samplePromptTotal, 500);
 
     let compactionNotified = false;
 
@@ -421,26 +443,12 @@ async function runGooseAgent(
         );
       }
 
-      // Compute session context usage from prompt_tokens_total delta
-      try {
-        const metricsResp = await fetch(`${endpoint}/metrics`, { signal: AbortSignal.timeout(3000) });
-        const metricsText = await metricsResp.text();
-        const match = metricsText.match(/llamacpp:prompt_tokens_total\s+(\d+)/);
-        if (match && baselinePromptTokens > 0) {
-          const currentPromptTokens = parseInt(match[1]);
-          const sessionCtxUsed = currentPromptTokens - baselinePromptTokens;
-          if (sessionCtxUsed > 0) {
-            // Store for the slot-status endpoint to read
-            await fetch(`${DASHBOARD_API_URL}/chat/session-ctx`, {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ ctx_used: sessionCtxUsed }),
-              signal: AbortSignal.timeout(3000),
-            }).catch(() => {});
-            logger.info({ group: group.name, sessionCtxUsed, contextLimit }, 'Session context usage updated');
-          }
-        }
-      } catch { /* ignore — context tracking is best-effort */ }
+      // Stop polling and take one final sample to catch the last LLM call.
+      clearInterval(ctxPollHandle);
+      await samplePromptTotal();
+      if (lastJump > 0) {
+        logger.info({ group: group.name, ctxUsed: lastJump, contextLimit }, 'Session context usage finalized (last LLM call prompt size)');
+      }
 
       logger.info(
         { group: group.name, containerName, code, resultLen: result.length, resultPreview: result.slice(0, 200), stdoutLen: stdout.length, stderrLen: stderr.length },
