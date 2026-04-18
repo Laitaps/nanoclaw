@@ -283,12 +283,12 @@ async function runGooseAgent(
     GOOSE_IMAGE,
     'run',
     '--no-profile',
-    // --debug: disables Goose's terminal-display truncation ("(N more lines → /tmp/goose-XXXX.txt)")
-    // so long assistant messages (e.g. inline SVG) aren't cut before reaching nanoclaw's stdout.
-    // --quiet:  suppresses the per-tool-call MCP response dumps that --debug alone exposes as raw
-    // Rust Debug structs ("Annotated { raw: Text(RawTextContent { text: ... }) }"). Together we get
-    // the untruncated final model response only, with no tool-trace noise.
-    '--debug',
+    // --quiet: prints only the final model response to stdout (suppresses tool-call traces).
+    // Previously paired with --debug to also disable length truncation, but --debug turned out
+    // to feed the MCP tool-response Rust Debug struct into the model's context, causing
+    // Skippy to echo "Annotated { raw: Text(RawTextContent { ... }) }" blocks in replies.
+    // Dropping --debug for now; long-SVG truncation is handled by post-processing the
+    // "(N more lines → /tmp/goose-XXXX.txt)" pointer below.
     '--quiet',
     '--name', gooseSessionName,
     ...(hasExistingSession ? ['--resume'] : []),
