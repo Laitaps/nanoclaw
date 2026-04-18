@@ -432,6 +432,25 @@ async function runGooseAgent(
       // Remove any remaining ─── lines
       result = result.replace(/^[\s\u2500]+$/gm, '').trim();
 
+      // Dedupe fenced code blocks. When the model does a tool-call retry loop
+      // (--max-tool-repetitions, or the create_note tool bouncing), it may
+      // emit the same ```svg/```dot/```mermaid block in two separate assistant
+      // turns. Both turns' text gets concatenated in stdout. Keep only the
+      // first occurrence of each identical block — later duplicates get
+      // dropped, interleaved prose stays.
+      {
+        const fenceRe = /```(\w*)\n([\s\S]*?)\n```/g;
+        const seen = new Set<string>();
+        result = result.replace(fenceRe, (match, lang, content) => {
+          const key = (lang || '') + '::' + content.trim();
+          if (seen.has(key)) return '';
+          seen.add(key);
+          return match;
+        });
+        // Collapse any 3+ consecutive newlines from removed blocks back to 2.
+        result = result.replace(/\n{3,}/g, '\n\n').trim();
+      }
+
       // Log compaction outcome
       if (compactionNotified) {
         const failed = stdout.includes('Compaction failed') || stderr.includes('Compaction failed');
