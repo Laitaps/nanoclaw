@@ -283,6 +283,9 @@ async function runGooseAgent(
     GOOSE_IMAGE,
     'run',
     '--no-profile',
+    // --debug disables Goose's terminal-display truncation ("(N more lines → /tmp/goose-XXXX.txt)").
+    // Without it, long assistant messages (e.g. inline SVG) get cut mid-content before reaching nanoclaw's stdout.
+    '--debug',
     '--name', gooseSessionName,
     ...(hasExistingSession ? ['--resume'] : []),
     '--max-tool-repetitions', '3',
@@ -299,42 +302,37 @@ async function runGooseAgent(
     '-t', prompt,
   ];
 
-  // Track current slot context by polling prompt_tokens_total and recording
-  // the most recent "jump". Each LLM request increments this counter by its
-  // prompt size, so the last jump equals the most recent call's prompt =
-  // current slot context. Cumulative delta would over-report by Nx for an
-  // N-tool-call session because each iteration re-sends the full conversation.
-  let lastObservedPromptTotal = 0;
-  let lastJump = 0;
-  try {
-    const metricsResp = await fetch(`${endpoint}/metrics`, { signal: AbortSignal.timeout(3000) });
-    const metricsText = await metricsResp.text();
-    const match = metricsText.match(/llamacpp:prompt_tokens_total\s+(\d+)/);
-    if (match) {
-      lastObservedPromptTotal = parseInt(match[1]);
-    }
-  } catch { /* ignore — we'll just skip context tracking */ }
+  // Snapshot llama-server's cumulative counters before and after the Goose run.
+  // Deltas give us exact per-turn totals — immune to cache-reuse distortion,
+  // lifetime-average gauges, and the 500ms-polling race the prior code had.
+  interface MetricsSnapshot {
+    promptTokens: number;
+    promptSeconds: number;
+    predictedTokens: number;
+    predictedSeconds: number;
+  }
 
-  const samplePromptTotal = async (): Promise<void> => {
+  const readMetricsSnapshot = async (): Promise<MetricsSnapshot | null> => {
     try {
-      const resp = await fetch(`${endpoint}/metrics`, { signal: AbortSignal.timeout(2000) });
+      const resp = await fetch(`${endpoint}/metrics`, { signal: AbortSignal.timeout(3000) });
+      if (!resp.ok) return null;
       const text = await resp.text();
-      const m = text.match(/llamacpp:prompt_tokens_total\s+(\d+)/);
-      if (!m) return;
-      const v = parseInt(m[1]);
-      const delta = v - lastObservedPromptTotal;
-      if (delta > 0) {
-        lastJump = delta;
-        await fetch(`${DASHBOARD_API_URL}/chat/session-ctx`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ctx_used: lastJump }),
-          signal: AbortSignal.timeout(2000),
-        }).catch(() => {});
-      }
-      lastObservedPromptTotal = v;
-    } catch { /* ignore */ }
+      const pull = (name: string): number | null => {
+        const m = text.match(new RegExp(`^${name}\\s+([\\d.]+)`, 'm'));
+        return m ? parseFloat(m[1]) : null;
+      };
+      const pt = pull('llamacpp:prompt_tokens_total');
+      const ps = pull('llamacpp:prompt_seconds_total');
+      const gt = pull('llamacpp:tokens_predicted_total');
+      const gs = pull('llamacpp:tokens_predicted_seconds_total');
+      if (pt === null || ps === null || gt === null || gs === null) return null;
+      return { promptTokens: pt, promptSeconds: ps, predictedTokens: gt, predictedSeconds: gs };
+    } catch {
+      return null;
+    }
   };
+
+  const startSnapshot = await readMetricsSnapshot();
 
   return new Promise<ContainerOutput>((resolve) => {
     let stdout = '';
@@ -342,10 +340,6 @@ async function runGooseAgent(
 
     const proc = spawn('docker', args);
     logger.info({ group: group.name, containerName }, 'Spawning Goose container');
-
-    // Poll for prompt_tokens_total jumps every 500ms while Goose runs. Each
-    // jump = one LLM call's prompt size; the latest jump = current slot fill.
-    const ctxPollHandle = setInterval(samplePromptTotal, 500);
 
     let compactionNotified = false;
 
@@ -443,11 +437,40 @@ async function runGooseAgent(
         );
       }
 
-      // Stop polling and take one final sample to catch the last LLM call.
-      clearInterval(ctxPollHandle);
-      await samplePromptTotal();
-      if (lastJump > 0) {
-        logger.info({ group: group.name, ctxUsed: lastJump, contextLimit }, 'Session context usage finalized (last LLM call prompt size)');
+      // Snapshot counters after Goose exits. Delta from startSnapshot gives
+      // exact per-turn totals, which we POST to the dashboard for accurate
+      // pp/tg rates and running session-context accumulation.
+      const endSnapshot = await readMetricsSnapshot();
+      if (startSnapshot && endSnapshot) {
+        const dPromptTokens = endSnapshot.promptTokens - startSnapshot.promptTokens;
+        const dPromptSeconds = endSnapshot.promptSeconds - startSnapshot.promptSeconds;
+        const dPredictedTokens = endSnapshot.predictedTokens - startSnapshot.predictedTokens;
+        const dPredictedSeconds = endSnapshot.predictedSeconds - startSnapshot.predictedSeconds;
+        // Guard against llama-server restart mid-turn (counters reset → negative deltas).
+        if (dPromptTokens >= 0 && dPredictedTokens >= 0) {
+          logger.info(
+            { group: group.name, dPromptTokens, dPromptSeconds, dPredictedTokens, dPredictedSeconds },
+            'Goose turn metrics captured',
+          );
+          await fetch(`${DASHBOARD_API_URL}/chat/turn-stats`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              pp_tokens: dPromptTokens,
+              pp_seconds: dPromptSeconds,
+              tg_tokens: dPredictedTokens,
+              tg_seconds: dPredictedSeconds,
+            }),
+            signal: AbortSignal.timeout(3000),
+          }).catch((err) =>
+            logger.warn({ group: group.name, err }, 'Failed to POST turn-stats to dashboard'),
+          );
+        } else {
+          logger.warn(
+            { group: group.name, dPromptTokens, dPredictedTokens },
+            'Negative counter delta detected (llama-server restart?) — skipping turn-stats POST',
+          );
+        }
       }
 
       logger.info(
