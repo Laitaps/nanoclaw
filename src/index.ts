@@ -130,6 +130,23 @@ function getModelName(groupFolder: string): string {
  * Run Goose CLI in a Docker container for non-Claude models.
  * Returns the text result from Goose.
  */
+/**
+ * Tell the RA that Goose just compacted the session. The RA uses this
+ * to replace (instead of add to) its ``session_ctx_used`` accumulator
+ * on the next ``/chat/turn-stats`` call — the first post-compaction
+ * turn's ``pp_tokens`` is the accurate new baseline since cache-reuse
+ * misses after a summary rewrite. Fire-and-forget; we don't block the
+ * agent loop on the RA's availability.
+ */
+function signalCompactionToRa(groupName: string): void {
+  fetch(`${DASHBOARD_API_URL}/chat/turn-stats/compacted`, {
+    method: 'POST',
+    signal: AbortSignal.timeout(3000),
+  }).catch((err) =>
+    logger.warn({ group: groupName, err }, 'Failed to signal compaction to RA'),
+  );
+}
+
 async function runGooseAgent(
   group: RegisteredGroup,
   prompt: string,
@@ -355,6 +372,7 @@ async function runGooseAgent(
       if (!compactionNotified && chunk.includes('Compacting to continue conversation')) {
         compactionNotified = true;
         logger.info({ group: group.name }, 'Goose is compacting conversation context');
+        signalCompactionToRa(group.name);
         storeMessage({
           id: `sys-compact-${Date.now()}`,
           chat_jid: chatJid,
@@ -376,6 +394,7 @@ async function runGooseAgent(
       if (!compactionNotified && chunk.includes('Compacting to continue conversation')) {
         compactionNotified = true;
         logger.info({ group: group.name }, 'Goose is compacting conversation context');
+        signalCompactionToRa(group.name);
         storeMessage({
           id: `sys-compact-${Date.now()}`,
           chat_jid: chatJid,
