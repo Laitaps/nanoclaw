@@ -64,7 +64,7 @@ const GOOSE_IMAGE = 'ghcr.io/block/goose@sha256:f92c0b5fa49ba6e96820535d9ac33178
 // Research assistant host — all MCP and API URLs derive from this
 // For Goose containers (--network host): use the host's real IP so MCP
 // URLs are reachable.  host.docker.internal doesn't resolve on host network.
-const RESEARCH_HOST = process.env.RESEARCH_HOST || 'http://192.168.68.57';
+const RESEARCH_HOST = process.env.RESEARCH_HOST || 'http://192.168.68.70';
 const MCP_RESEARCH_URL = `${RESEARCH_HOST}:8000/mcp`;
 const DASHBOARD_API_URL = `${RESEARCH_HOST}:3000/api`;
 

@@ -68,7 +68,7 @@ const MODEL_MAP: Record<string, string> = {
 // OpenAI-compatible endpoints for non-Claude models.
 // These bypass the Claude SDK and use Goose CLI.
 const OPENAI_ENDPOINTS: Record<string, string> = {
-  'local': 'http://192.168.68.57:8083',
+  'local': 'http://192.168.68.70:8083',
 };
 
 interface ModelConfig {
@@ -512,19 +512,19 @@ async function runQuery(
         },
         research: {
           type: 'http',
-          url: 'http://192.168.68.57:8000/mcp',
+          url: 'http://192.168.68.70:8000/mcp',
         },
         mast: {
           type: 'http',
-          url: 'http://192.168.68.57:8001/mcp',
+          url: 'http://192.168.68.70:8001/mcp',
         },
         viz: {
           type: 'http',
-          url: 'http://192.168.68.57:8002/mcp',
+          url: 'http://192.168.68.70:8002/mcp',
         },
         ai: {
           type: 'http',
-          url: 'http://192.168.68.57:8003/mcp',
+          url: 'http://192.168.68.70:8003/mcp',
         },
       },
       hooks: {
@@ -656,10 +656,10 @@ async function runQueryGoose(
     // Nanoclaw MCP via stdio (send_message, send_image, schedule_task, etc.)
     '--with-extension', `${nanoclawEnv} node ${nanoclawMcpPath}`,
     // HTTP MCP servers: research, mast, viz, ai
-    '--with-streamable-http-extension', 'http://192.168.68.57:8000/mcp',
-    '--with-streamable-http-extension', 'http://192.168.68.57:8001/mcp',
-    '--with-streamable-http-extension', 'http://192.168.68.57:8002/mcp',
-    '--with-streamable-http-extension', 'http://192.168.68.57:8003/mcp',
+    '--with-streamable-http-extension', 'http://192.168.68.70:8000/mcp',
+    '--with-streamable-http-extension', 'http://192.168.68.70:8001/mcp',
+    '--with-streamable-http-extension', 'http://192.168.68.70:8002/mcp',
+    '--with-streamable-http-extension', 'http://192.168.68.70:8003/mcp',
     '-q',  // quiet mode — only final text response on stdout
   ];
 
