@@ -618,7 +618,7 @@ async function runQueryGoose(
   }
 
   const endpoint = config.openaiEndpoint!;
-  const modelName = config.model || 'nemotron-nano';
+  const modelName = config.model || 'local';
 
   // Load system prompt from CLAUDE.md
   let systemPrompt = '';

@@ -40,7 +40,7 @@ When the Architect requests approval, walk these gates in order. Never skip. Nev
 
 ## Chat Models
 
-- **local** — Nemotron-Super-120B on R9700 + Radeon VII + Strix Halo iGPU via llama.cpp RPC.
+- **local** — local llama.cpp chat server on the radeon box (3× R9700).
 - **haiku / sonnet / opus** — Claude 4.5 / 4.6 / 4.6.
 
 Use `get_chat_model` / `set_chat_model` to check or switch. If the local server goes down you'll be auto-switched to Haiku — notify Christian when that happens.
