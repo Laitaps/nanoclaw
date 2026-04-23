@@ -515,6 +515,35 @@ async function runGooseAgent(
         }
       }
 
+      // Detect Goose's truncated-tool-call error and rewrite it to a
+      // user-actionable message instead of leaking the JSON-RPC code.
+      // Triggered when llama-server hits its per-request generation cap
+      // (--n-predict) mid-tool-call: the JSON closes unterminated and
+      // Goose's MCP layer raises -32602. The cap was bumped to 32768 on
+      // the server side, but if Skippy ever gets asked for a bigger
+      // single output (or a future model has a tighter default), this
+      // catches it and tells the user what to do instead of dumping a
+      // raw error code into chat. Pattern is specific enough that it
+      // can't false-positive on legitimate text.
+      if (
+        result.includes('-32602: Could not interpret tool use parameters') &&
+        result.includes('EOF while parsing')
+      ) {
+        logger.warn(
+          { group: group.name, containerName, originalLen: result.length },
+          'Detected truncated tool-call error from Goose (-32602); rewriting to friendly message',
+        );
+        result = (
+          "Sorry — my response got cut off mid-tool-call. The model hit its " +
+          "per-request output cap before finishing. Try one of:\n\n" +
+          "• Ask for a smaller chunk (e.g. \"just the function signatures\" " +
+          "or \"only the first 200 lines\").\n" +
+          "• Ask me to write the result to a file in pieces instead of one shot.\n" +
+          "• If the slot is also nearly full (check the chat header), hit " +
+          "Clear Chat and re-ask."
+        );
+      }
+
       logger.info(
         { group: group.name, containerName, code, resultLen: result.length, resultPreview: result.slice(0, 200), stdoutLen: stdout.length, stderrLen: stderr.length },
         'Goose container finished',
