@@ -323,9 +323,16 @@ async function runGooseAgent(
     '-t', prompt,
   ];
 
-  // Snapshot llama-server's cumulative counters before and after the Goose run.
-  // Deltas give us exact per-turn totals — immune to cache-reuse distortion,
-  // lifetime-average gauges, and the 500ms-polling race the prior code had.
+  // Snapshot the chat server's cumulative counters before and after the
+  // Goose run. Deltas give us exact per-turn totals — immune to cache-reuse
+  // distortion, lifetime-average gauges, and the 500ms-polling race the
+  // prior code had.
+  //
+  // Both llama-server and vLLM expose Prometheus /metrics. We try llama.cpp
+  // names first; if they're absent (vLLM), fall back to vllm:* equivalents.
+  // The seconds counters on vLLM come from Histogram _sum series, which are
+  // monotonic just like llama.cpp's _seconds_total — the delta math is
+  // identical.
   interface MetricsSnapshot {
     promptTokens: number;
     promptSeconds: number;
@@ -338,14 +345,21 @@ async function runGooseAgent(
       const resp = await fetch(`${endpoint}/metrics`, { signal: AbortSignal.timeout(3000) });
       if (!resp.ok) return null;
       const text = await resp.text();
+      // vLLM emits labels (e.g. `vllm:prompt_tokens_total{engine="0",...}`),
+      // llama-server emits bare counter names — accept both.
       const pull = (name: string): number | null => {
-        const m = text.match(new RegExp(`^${name}\\s+([\\d.]+)`, 'm'));
+        const m = text.match(new RegExp(`^${name}(?:\\{[^}]*\\})?\\s+([\\d.eE+-]+)`, 'm'));
         return m ? parseFloat(m[1]) : null;
       };
-      const pt = pull('llamacpp:prompt_tokens_total');
-      const ps = pull('llamacpp:prompt_seconds_total');
-      const gt = pull('llamacpp:tokens_predicted_total');
-      const gs = pull('llamacpp:tokens_predicted_seconds_total');
+      const pt = pull('llamacpp:prompt_tokens_total') ?? pull('vllm:prompt_tokens_total');
+      const ps =
+        pull('llamacpp:prompt_seconds_total') ??
+        pull('vllm:request_prefill_time_seconds_sum');
+      const gt =
+        pull('llamacpp:tokens_predicted_total') ?? pull('vllm:generation_tokens_total');
+      const gs =
+        pull('llamacpp:tokens_predicted_seconds_total') ??
+        pull('vllm:request_decode_time_seconds_sum');
       if (pt === null || ps === null || gt === null || gs === null) return null;
       return { promptTokens: pt, promptSeconds: ps, predictedTokens: gt, predictedSeconds: gs };
     } catch {
@@ -488,7 +502,7 @@ async function runGooseAgent(
         const dPromptSeconds = endSnapshot.promptSeconds - startSnapshot.promptSeconds;
         const dPredictedTokens = endSnapshot.predictedTokens - startSnapshot.predictedTokens;
         const dPredictedSeconds = endSnapshot.predictedSeconds - startSnapshot.predictedSeconds;
-        // Guard against llama-server restart mid-turn (counters reset → negative deltas).
+        // Guard against chat-server restart mid-turn (counters reset → negative deltas).
         if (dPromptTokens >= 0 && dPredictedTokens >= 0) {
           logger.info(
             { group: group.name, dPromptTokens, dPromptSeconds, dPredictedTokens, dPredictedSeconds },
@@ -510,7 +524,7 @@ async function runGooseAgent(
         } else {
           logger.warn(
             { group: group.name, dPromptTokens, dPredictedTokens },
-            'Negative counter delta detected (llama-server restart?) — skipping turn-stats POST',
+            'Negative counter delta detected (chat-server restart?) — skipping turn-stats POST',
           );
         }
       }
