@@ -61,9 +61,14 @@ jobs:
           [[ "$BUMP_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "FAIL: bad BUMP_SHA $BUMP_SHA" >&2; exit 1; }
           [[ "$NANOCLAW_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "FAIL: bad NANOCLAW_SHA $NANOCLAW_SHA" >&2; exit 1; }
 
-          PG_PASSWORD=$(python3 -c "import json; print(json.load(open('pg_config.json'))['password'])")
-          PG_USER=$(python3 -c "import json; print(json.load(open('pg_config.json'))['user'])")
-          PG_DB=$(python3 -c "import json; print(json.load(open('pg_config.json'))['database'])")
+          # pg_config.json is local to the prod host (gitignored) — the
+          # runner's CI checkout doesn't contain it. Read from the prod
+          # checkout's well-known path; this only works because the
+          # runner shares the host with prod.
+          PG_CFG=/home/christian/projects/research_assistant/pg_config.json
+          PG_PASSWORD=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['password'])" "$PG_CFG")
+          PG_USER=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['user'])" "$PG_CFG")
+          PG_DB=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['database'])" "$PG_CFG")
 
           PGPASSWORD="$PG_PASSWORD" psql -h localhost -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 <<SQL
           -- Reserved synthetic PR row owning every auto-bump promotion.
