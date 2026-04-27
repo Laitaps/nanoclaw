@@ -437,33 +437,39 @@ async function runGooseAgent(
       //     param: value
       //   (blank lines)
       //   Actual response text
-      // Strategy: find the last ▸ block and take everything after it.
-      // If no ▸ blocks, use the full output.
+      // Old strategy was "take everything AFTER the last ▸-block". That broke
+      // when the model called a tool and then stopped without emitting more
+      // user-facing text afterwards (model hit a stop token, or the entire
+      // user-facing text came BEFORE the tool call). Result: chat reply
+      // landed in the DB as an empty string and the user saw nothing.
+      //
+      // New strategy: walk lines and skip each ▸-trace block (the trace
+      // line + its indented continuation lines), keeping every line that
+      // isn't part of one. Text before, between, and after tool calls is
+      // preserved.
       let result = stdout;
       // Strip Goose startup banner (duck ASCII art + session info)
       result = result.replace(/^[\s\S]*?goose is ready\n?/m, '');
-      const lastTrace = result.lastIndexOf('\u25B8'); // ▸ character
-      if (lastTrace !== -1) {
-        // Find the end of the ▸ line and any indented params after it
-        let pos = result.indexOf('\n', lastTrace);
-        if (pos !== -1) {
-          // Skip indented continuation lines (params)
-          while (pos < result.length) {
-            const nextLine = result.indexOf('\n', pos + 1);
-            const line = nextLine !== -1
-              ? result.slice(pos + 1, nextLine)
-              : result.slice(pos + 1);
-            if (line.match(/^\s{2,}\S/)) {
-              pos = nextLine !== -1 ? nextLine : result.length;
-            } else {
-              break;
+      {
+        const lines = result.split('\n');
+        const kept: string[] = [];
+        let i = 0;
+        while (i < lines.length) {
+          if (lines[i].includes('▸')) {  // ▸ — tool trace start
+            i += 1;
+            // Skip indented continuation (parameter lines).
+            while (i < lines.length && /^\s{2,}\S/.test(lines[i])) {
+              i += 1;
             }
+            continue;
           }
-          result = result.slice(pos);
+          kept.push(lines[i]);
+          i += 1;
         }
+        result = kept.join('\n');
       }
-      // Remove any remaining ─── lines
-      result = result.replace(/^[\s\u2500]+$/gm, '').trim();
+      // Remove any remaining ─── separator lines
+      result = result.replace(/^[\s─]+$/gm, '').trim();
 
       // Dedupe fenced code blocks. When the model does a tool-call retry loop
       // (--max-tool-repetitions, or the create_note tool bouncing), it may
@@ -482,6 +488,15 @@ async function runGooseAgent(
         });
         // Collapse any 3+ consecutive newlines from removed blocks back to 2.
         result = result.replace(/\n{3,}/g, '\n\n').trim();
+      }
+
+      // Final fallback: if everything got stripped (e.g. the model only
+      // emitted a tool call that failed and produced no surrounding text),
+      // surface a placeholder so the user sees a turn happened instead of
+      // silent emptiness in the chat. Empty string would otherwise just
+      // disappear into the message stream.
+      if (!result && stdout.trim()) {
+        result = `_[${ASSISTANT_NAME} ran but emitted no visible text — likely an unrecovered tool-call failure. Try again, or check Goose logs.]_`;
       }
 
       // Log compaction outcome
