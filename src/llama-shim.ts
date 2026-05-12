@@ -131,9 +131,14 @@ export async function startLlamaShim(opts: ShimOptions): Promise<ShimHandle> {
     clientReq.pipe(upstreamReq);
   });
 
+  // Bind on all interfaces — when nanoclaw runs in a bridge-network
+  // container and Goose runs with --network=host, Goose connects via
+  // nanoclaw's container IP from the host's network namespace, not via
+  // 127.0.0.1 (different namespaces). The caller (index.ts) supplies the
+  // reachable IP to Goose in OPENAI_HOST.
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
+    server.listen(0, '0.0.0.0', () => {
       server.removeListener('error', reject);
       resolve();
     });
