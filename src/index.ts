@@ -1,5 +1,6 @@
 import { execSync, spawn } from 'child_process';
 import fs from 'fs';
+import { networkInterfaces } from 'os';
 import path from 'path';
 
 import {
@@ -131,6 +132,27 @@ function getModelName(groupFolder: string): string {
  * Run Goose CLI in a Docker container for non-Claude models.
  * Returns the text result from Goose.
  */
+/**
+ * Find the first non-loopback IPv4 address of this container. The shim
+ * binds on 0.0.0.0 (so it's reachable from outside the container's
+ * network namespace), but we have to tell Goose which address to dial.
+ *
+ * nanoclaw runs in a bridge-network container (typically 172.18.0.x);
+ * Goose runs with --network=host, so its 127.0.0.1 is the host's
+ * loopback — wrong namespace. The host CAN reach nanoclaw's bridge IP
+ * via docker's bridge interface, so we hand Goose that.
+ */
+function getContainerExternalIp(): string {
+  const ifs = networkInterfaces();
+  for (const [name, addrs] of Object.entries(ifs)) {
+    if (name === 'lo' || !addrs) continue;
+    for (const a of addrs) {
+      if (a.family === 'IPv4' && !a.internal) return a.address;
+    }
+  }
+  return '127.0.0.1';
+}
+
 /**
  * Fire-and-forget POST of one llama-shim event to the RA. The RA persists
  * these into chat_llama_events; the dashboard's slot-status endpoint
@@ -278,13 +300,18 @@ async function runGooseAgent(
   // Check if a prior session exists so we can resume it
   const hasExistingSession = fs.existsSync(path.join(gooseShareDir, 'sessions', 'sessions.db'));
 
-  // Start the per-turn shim. Sits on a localhost ephemeral port and proxies
-  // Goose -> llama-server, intercepting `usage` + `timings` on every
-  // /v1/chat/completions response. We POST each event to the RA so the
-  // dashboard's slot-status endpoint can compute ctx_used / pp_tps / tg_tps
-  // from per-request truth instead of cross-contaminated Prometheus deltas.
-  // chatJid as conversation_id is fine for now — single chat — but the
-  // schema accepts arbitrary ids so AICC etc. can use the same path later.
+  // Start the per-turn shim on an ephemeral port. It proxies Goose ->
+  // llama-server, intercepting `usage` + `timings` on every
+  // /v1/chat/completions response, and POSTs each event to the RA so
+  // slot-status can compute ctx_used / pp_tps / tg_tps from per-request
+  // truth instead of cross-contaminated Prometheus deltas. chatJid as
+  // conversation_id is fine for now — single chat — but the schema
+  // accepts arbitrary ids so AICC etc. can use the same path later.
+  //
+  // shimHost is nanoclaw's bridge IP. Goose runs with --network=host so
+  // it can't reach nanoclaw's 127.0.0.1; we dial the bridge IP (e.g.
+  // 172.18.0.2) which the host can route to via docker0.
+  const shimHost = getContainerExternalIp();
   const shim = await startLlamaShim({
     upstreamUrl: endpoint,
     conversationId: chatJid,
@@ -297,12 +324,13 @@ async function runGooseAgent(
     '--network', 'host',
     '-e', `GOOSE_PROVIDER=openai`,
     '-e', `GOOSE_MODEL=${modelId}`,
-    // OPENAI_HOST points at the shim, not at llama-server directly.
-    // Goose uses --network host, so 127.0.0.1 from inside the container
-    // resolves to the host's loopback where the shim is listening. The
-    // shim transparently proxies to `endpoint`, capturing per-request
-    // usage + timings on the way through.
-    '-e', `OPENAI_HOST=http://127.0.0.1:${shim.port}`,
+    // OPENAI_HOST points at the shim. nanoclaw runs in a bridge-network
+    // container and Goose runs with --network=host, so we can't use
+    // 127.0.0.1 — Goose's loopback is the HOST's loopback, not nanoclaw's.
+    // Dial nanoclaw's bridge IP, which is reachable from host-network
+    // containers via docker's bridge interface. The shim itself listens
+    // on 0.0.0.0 so it accepts the connection.
+    '-e', `OPENAI_HOST=http://${shimHost}:${shim.port}`,
     '-e', `OPENAI_API_KEY=${modelConfig.api_key || 'not-needed'}`,
     '-e', `GOOSE_CONTEXT_LIMIT=${contextLimit}`,
     '-e', `GOOSE_AUTO_COMPACT_THRESHOLD=${compactThreshold}`,
