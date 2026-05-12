@@ -37,6 +37,7 @@ import {
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { startIpcWatcher } from './ipc.js';
+import { startLlamaShim, type LlamaEvent } from './llama-shim.js';
 import { formatMessages, formatOutbound } from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { NewMessage, RegisteredGroup } from './types.js';
@@ -131,19 +132,18 @@ function getModelName(groupFolder: string): string {
  * Returns the text result from Goose.
  */
 /**
- * Tell the RA that Goose just compacted the session. The RA uses this
- * to replace (instead of add to) its ``session_ctx_used`` accumulator
- * on the next ``/chat/turn-stats`` call — the first post-compaction
- * turn's ``pp_tokens`` is the accurate new baseline since cache-reuse
- * misses after a summary rewrite. Fire-and-forget; we don't block the
- * agent loop on the RA's availability.
+ * Fire-and-forget POST of one llama-shim event to the RA. The RA persists
+ * these into chat_llama_events; the dashboard's slot-status endpoint
+ * reads the latest row to display per-conversation ctx/pp/tg.
  */
-function signalCompactionToRa(groupName: string): void {
-  fetch(`${DASHBOARD_API_URL}/chat/turn-stats/compacted`, {
+function postLlamaEventToRa(event: LlamaEvent, groupName: string): void {
+  fetch(`${DASHBOARD_API_URL}/chat/llama-event`, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(event),
     signal: AbortSignal.timeout(3000),
   }).catch((err) =>
-    logger.warn({ group: groupName, err }, 'Failed to signal compaction to RA'),
+    logger.warn({ group: groupName, err }, 'Failed to POST llama-event to RA'),
   );
 }
 
@@ -278,13 +278,31 @@ async function runGooseAgent(
   // Check if a prior session exists so we can resume it
   const hasExistingSession = fs.existsSync(path.join(gooseShareDir, 'sessions', 'sessions.db'));
 
+  // Start the per-turn shim. Sits on a localhost ephemeral port and proxies
+  // Goose -> llama-server, intercepting `usage` + `timings` on every
+  // /v1/chat/completions response. We POST each event to the RA so the
+  // dashboard's slot-status endpoint can compute ctx_used / pp_tps / tg_tps
+  // from per-request truth instead of cross-contaminated Prometheus deltas.
+  // chatJid as conversation_id is fine for now — single chat — but the
+  // schema accepts arbitrary ids so AICC etc. can use the same path later.
+  const shim = await startLlamaShim({
+    upstreamUrl: endpoint,
+    conversationId: chatJid,
+    onEvent: (event) => postLlamaEventToRa(event, group.name),
+  });
+
   const args = [
     'run', '--rm', '-i',
     '--name', containerName,
     '--network', 'host',
     '-e', `GOOSE_PROVIDER=openai`,
     '-e', `GOOSE_MODEL=${modelId}`,
-    '-e', `OPENAI_HOST=${endpoint}`,
+    // OPENAI_HOST points at the shim, not at llama-server directly.
+    // Goose uses --network host, so 127.0.0.1 from inside the container
+    // resolves to the host's loopback where the shim is listening. The
+    // shim transparently proxies to `endpoint`, capturing per-request
+    // usage + timings on the way through.
+    '-e', `OPENAI_HOST=http://127.0.0.1:${shim.port}`,
     '-e', `OPENAI_API_KEY=${modelConfig.api_key || 'not-needed'}`,
     '-e', `GOOSE_CONTEXT_LIMIT=${contextLimit}`,
     '-e', `GOOSE_AUTO_COMPACT_THRESHOLD=${compactThreshold}`,
@@ -323,52 +341,6 @@ async function runGooseAgent(
     '-t', prompt,
   ];
 
-  // Snapshot the chat server's cumulative counters before and after the
-  // Goose run. Deltas give us exact per-turn totals — immune to cache-reuse
-  // distortion, lifetime-average gauges, and the 500ms-polling race the
-  // prior code had.
-  //
-  // Both llama-server and vLLM expose Prometheus /metrics. We try llama.cpp
-  // names first; if they're absent (vLLM), fall back to vllm:* equivalents.
-  // The seconds counters on vLLM come from Histogram _sum series, which are
-  // monotonic just like llama.cpp's _seconds_total — the delta math is
-  // identical.
-  interface MetricsSnapshot {
-    promptTokens: number;
-    promptSeconds: number;
-    predictedTokens: number;
-    predictedSeconds: number;
-  }
-
-  const readMetricsSnapshot = async (): Promise<MetricsSnapshot | null> => {
-    try {
-      const resp = await fetch(`${endpoint}/metrics`, { signal: AbortSignal.timeout(3000) });
-      if (!resp.ok) return null;
-      const text = await resp.text();
-      // vLLM emits labels (e.g. `vllm:prompt_tokens_total{engine="0",...}`),
-      // llama-server emits bare counter names — accept both.
-      const pull = (name: string): number | null => {
-        const m = text.match(new RegExp(`^${name}(?:\\{[^}]*\\})?\\s+([\\d.eE+-]+)`, 'm'));
-        return m ? parseFloat(m[1]) : null;
-      };
-      const pt = pull('llamacpp:prompt_tokens_total') ?? pull('vllm:prompt_tokens_total');
-      const ps =
-        pull('llamacpp:prompt_seconds_total') ??
-        pull('vllm:request_prefill_time_seconds_sum');
-      const gt =
-        pull('llamacpp:tokens_predicted_total') ?? pull('vllm:generation_tokens_total');
-      const gs =
-        pull('llamacpp:tokens_predicted_seconds_total') ??
-        pull('vllm:request_decode_time_seconds_sum');
-      if (pt === null || ps === null || gt === null || gs === null) return null;
-      return { promptTokens: pt, promptSeconds: ps, predictedTokens: gt, predictedSeconds: gs };
-    } catch {
-      return null;
-    }
-  };
-
-  const startSnapshot = await readMetricsSnapshot();
-
   return new Promise<ContainerOutput>((resolve) => {
     let stdout = '';
     let stderr = '';
@@ -386,7 +358,6 @@ async function runGooseAgent(
       if (!compactionNotified && chunk.includes('Compacting to continue conversation')) {
         compactionNotified = true;
         logger.info({ group: group.name }, 'Goose is compacting conversation context');
-        signalCompactionToRa(group.name);
         storeMessage({
           id: `sys-compact-${Date.now()}`,
           chat_jid: chatJid,
@@ -408,7 +379,6 @@ async function runGooseAgent(
       if (!compactionNotified && chunk.includes('Compacting to continue conversation')) {
         compactionNotified = true;
         logger.info({ group: group.name }, 'Goose is compacting conversation context');
-        signalCompactionToRa(group.name);
         storeMessage({
           id: `sys-compact-${Date.now()}`,
           chat_jid: chatJid,
@@ -508,41 +478,12 @@ async function runGooseAgent(
         );
       }
 
-      // Snapshot counters after Goose exits. Delta from startSnapshot gives
-      // exact per-turn totals, which we POST to the dashboard for accurate
-      // pp/tg rates and running session-context accumulation.
-      const endSnapshot = await readMetricsSnapshot();
-      if (startSnapshot && endSnapshot) {
-        const dPromptTokens = endSnapshot.promptTokens - startSnapshot.promptTokens;
-        const dPromptSeconds = endSnapshot.promptSeconds - startSnapshot.promptSeconds;
-        const dPredictedTokens = endSnapshot.predictedTokens - startSnapshot.predictedTokens;
-        const dPredictedSeconds = endSnapshot.predictedSeconds - startSnapshot.predictedSeconds;
-        // Guard against chat-server restart mid-turn (counters reset → negative deltas).
-        if (dPromptTokens >= 0 && dPredictedTokens >= 0) {
-          logger.info(
-            { group: group.name, dPromptTokens, dPromptSeconds, dPredictedTokens, dPredictedSeconds },
-            'Goose turn metrics captured',
-          );
-          await fetch(`${DASHBOARD_API_URL}/chat/turn-stats`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              pp_tokens: dPromptTokens,
-              pp_seconds: dPromptSeconds,
-              tg_tokens: dPredictedTokens,
-              tg_seconds: dPredictedSeconds,
-            }),
-            signal: AbortSignal.timeout(3000),
-          }).catch((err) =>
-            logger.warn({ group: group.name, err }, 'Failed to POST turn-stats to dashboard'),
-          );
-        } else {
-          logger.warn(
-            { group: group.name, dPromptTokens, dPredictedTokens },
-            'Negative counter delta detected (chat-server restart?) — skipping turn-stats POST',
-          );
-        }
-      }
+      // Tear down the per-turn shim. Any in-flight events have already
+      // been POSTed synchronously from the shim callback; closing just
+      // stops accepting new connections (Goose has exited anyway).
+      await shim.close().catch((err) =>
+        logger.warn({ group: group.name, err }, 'Failed to close llama shim'),
+      );
 
       // Detect Goose's truncated-tool-call error and rewrite it to a
       // user-actionable message instead of leaking the JSON-RPC code.
