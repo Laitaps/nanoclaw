@@ -366,12 +366,13 @@ async function runGooseAgent(
     // --resume, so it must be re-passed on every run or the personality is
     // lost on the second and subsequent messages of any session.
     ...(systemPrompt ? ['--system', systemPrompt] : []),
-    // MCP extensions: nanoclaw (local HTTP), research, mast, viz, ai
+    // MCP extensions: nanoclaw (local HTTP) and research (:8000). The mast
+    // (:8001), viz (:8002), and ai (:8003) services are not running; their
+    // extensions were removed because every session launch otherwise tried to
+    // connect and got ConnectionRefused (the benign-but-noisy Goose startup
+    // warning burst).
     ...(mcpHandle ? ['--with-streamable-http-extension', mcpHandle.url] : []),
     '--with-streamable-http-extension', MCP_RESEARCH_URL,
-    '--with-streamable-http-extension', `${RESEARCH_HOST}:8001/mcp`,
-    '--with-streamable-http-extension', `${RESEARCH_HOST}:8002/mcp`,
-    '--with-streamable-http-extension', `${RESEARCH_HOST}:8003/mcp`,
     '-t', prompt,
   ];
 

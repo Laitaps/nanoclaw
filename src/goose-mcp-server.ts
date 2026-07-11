@@ -445,9 +445,17 @@ export async function startGooseMcpServer(config: GooseMcpConfig): Promise<Goose
       return;
     }
 
-    // Create new transport for this session
+    // Create new transport for this session. Register it in the
+    // onsessioninitialized callback, which the SDK fires synchronously while
+    // assigning the session ID — before the initialize response is flushed.
+    // Registering here (rather than after handleRequest) closes the race where
+    // the client's immediate notifications/initialized POST arrives before the
+    // transports map has the entry and is wrongly rejected with HTTP 400.
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
+      onsessioninitialized: (sessionId: string) => {
+        transports.set(sessionId, transport);
+      },
     });
 
     // Connect a fresh McpServer to this transport
@@ -457,13 +465,6 @@ export async function startGooseMcpServer(config: GooseMcpConfig): Promise<Goose
 
     // Handle the initialize request
     await transport.handleRequest(req, res, body);
-
-    // Store transport by session ID (extracted from response headers after handleRequest)
-    // The transport stores its session ID internally; we capture it from the response
-    const responseSid = res.getHeader('mcp-session-id') as string | undefined;
-    if (responseSid) {
-      transports.set(responseSid, transport);
-    }
   });
 
   return new Promise((resolve, reject) => {
