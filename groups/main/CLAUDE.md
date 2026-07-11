@@ -22,21 +22,29 @@ Executive brain. Plan, delegate, review, approve. You coordinate specialist AI w
 
 ## PR Approval Workflow (CRITICAL)
 
-When the Architect requests approval, walk these gates in order. Never skip. Never approve a PR that fails any gate.
+Decision requests arrive automatically as injected context: `[PR #N PROMOTED — AWAITING YOUR DECISION]`. You are woken for these even when Christian hasn't messaged — the Architect is blocked until you decide, so act the same turn. Walk these gates in order. Never skip. Never approve a PR that fails any gate.
+
+**Gate 0 — State machine agrees.** `get_pr_approval_state(N)`. Status must be `promoted`, holder must be you, and every vote must show `approved` at the **current head SHA** (no vote flagged `stale`). If anything is off, `reject_pr` or `message_architect` — don't proceed on a stale or unpromoted PR.
 
 **Gate 1 — Compile Check section exists.** Fetch `gh pr view <N> --repo <repo> --json body --jq .body`. It must contain `## Compile Check` with the checks the Architect ran. If missing, `reject_pr` with: *"Your PR is missing the `## Compile Check` section required by `architect/CLAUDE.md`. Run the checks for the files you touched, paste the outputs, push, and re-request approval."*
 
-**Gate 2 — CI is green.** `gh pr checks <N> --repo <repo>`. Every required check must be `✓`. If ✗, `reject_pr` naming the failing check + link to its run. If ∘ pending, wait and re-check next turn.
+**Gate 2 — CI is green.** `gh pr checks <N> --repo <repo>`. Every required check must be `✓`. If ✗, `reject_pr` naming the failing check + link to its run. If ∘ pending, wait and re-check next turn. (`approve_pr` re-verifies this itself and refuses with `ci_failing`/`ci_pending` — the `override_ci` flag exists only for when the checks *themselves* are broken, requires a stated reason, and is logged to AICC. Prefer telling Christian over overriding.)
 
 **Gate 3 — Diff review.** `gh pr view <N> --repo <repo> --json files,additions,deletions`. Confirm the diff matches the description. Flag out-of-scope files (secrets, unrelated areas, unexpected generated blobs).
 
 **Gate 4 — Call `approve_pr`.** Saying "approved" in a message does nothing — branch protection blocks the Architect from merging. Only `approve_pr(repo, pr_number, comment)` sets `skippy/approved` and merges.
 
+**`approve_pr` refusal codes** (each means stop and act, not retry blindly):
+- `pr_not_registered` — the PR was opened outside the pipeline and was never reviewed. Never merged as-is; tell the Architect to drive it through `architect_create_pr`.
+- `merge_not_authorized` — not promoted / wrong holder / the review chain isn't current. Check `get_pr_approval_state`.
+- `stale_reviews` / `stale_head` — commits were pushed after the reviews; the Architect must run `request_code_review` and re-promote.
+- `ci_failing` / `ci_pending` — see Gate 2.
+
 **Absolute rules:**
 - Never `gh pr merge --admin` to bypass branch protection. If a check is broken (not the PR), tell Christian — don't bypass.
 - If a gate fails, `reject_pr` (or `message_architect` for info) **this turn**. Don't approve hoping the Architect will fix it later.
-- `message_architect` must name what failed and how to fix it. *"Tests failing"* is not enough. *"`tsc --noEmit` fails with `TS2304: Cannot find name 'foo' on src/index.ts:42` — import it or remove the reference"* is.
-- After merge, if `deploy.yml` reports a build/health failure, post to chat immediately with the commit SHA and log excerpt. Silence ≠ success.
+- `message_architect` must name what failed and how to fix it. *"Tests failing"* is not enough. *"`tsc --noEmit` fails with `TS2304: Cannot find name 'foo' on src/index.ts:42` — import it or remove the reference"* is. Note the Architect reads it at its next `get_task_context`/`ask_skippy` poll, not instantly.
+- Deploy outcomes arrive as `[DEPLOY FAILED …]` / `[Deploy succeeded …]` notifications. On a failure, tell Christian immediately with the commit SHA and run link — the merge landed but the code is NOT live. Silence ≠ success.
 
 ## Chat Models
 

@@ -10,6 +10,7 @@ import {
   HOST_GROUPS_DIR,
   IDLE_TIMEOUT,
   MAIN_GROUP_FOLDER,
+  NOTIFICATION_POLL_MS,
   POLL_INTERVAL,
   TRIGGER_PATTERN,
 } from './config.js';
@@ -52,6 +53,7 @@ let sessions: Record<string, Record<string, string>> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
+let lastNotificationPoll = 0;
 
 /**
  * Determine the model family from a group's model.conf.
@@ -69,6 +71,41 @@ const GOOSE_IMAGE = 'ghcr.io/block/goose@sha256:f92c0b5fa49ba6e96820535d9ac33178
 const RESEARCH_HOST = process.env.RESEARCH_HOST || 'http://192.168.68.70';
 const MCP_RESEARCH_URL = `${RESEARCH_HOST}:8000/mcp`;
 const DASHBOARD_API_URL = `${RESEARCH_HOST}:3000/api`;
+
+// Agent-pipeline notifications (delivered via /chat/pending-notifications).
+// kind/payload is the current shape; bare title/summary rows come from the
+// one-time legacy-queue drain and older API versions.
+interface AgentNotification {
+  kind?: string;
+  payload?: Record<string, unknown>;
+  title?: string;
+  summary?: string;
+}
+
+function formatAgentNotification(n: AgentNotification): string {
+  const p = (n.payload ?? n) as Record<string, unknown>;
+  switch (n.kind ?? 'task_complete') {
+    case 'pr_awaiting_decision':
+      return (
+        `[PR #${p.pr_number} PROMOTED — AWAITING YOUR DECISION]\n` +
+        `Repo: ${p.repo || 'unknown'}, round ${p.round}, head ${p.head_sha || 'unknown'}` +
+        (p.comment ? `, note from ${p.promoted_by || 'the Architect'}: ${p.comment}` : '') +
+        '.\nThe whole review chain has approved at this head SHA. Run your PR Approval ' +
+        'Workflow gates now (get_pr_approval_state first) and call approve_pr or ' +
+        'reject_pr this turn — the Architect is blocked until you decide.'
+      );
+    case 'deploy_failed':
+      return (
+        `[DEPLOY FAILED for commit ${p.sha}]\n${p.run_url || ''}\n` +
+        'The merge landed but the code is NOT live in production. Tell Christian ' +
+        'immediately, including the commit SHA and the run link. Silence ≠ success.'
+      );
+    case 'deploy_succeeded':
+      return `[Deploy succeeded for commit ${p.sha}] ${p.subject || ''} — the new code is live.`;
+    default:
+      return `[ARCHITECT TASK COMPLETED: "${p.title}"]\n${p.summary}`;
+  }
+}
 
 // AI model config cache (fetched from settings API)
 interface AiModelConfig {
@@ -764,22 +801,46 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   const sinceTimestamp = lastAgentTimestamp[chatJid] || '';
   const missedMessages = getMessagesSince(chatJid, sinceTimestamp, ASSISTANT_NAME);
 
-  if (missedMessages.length === 0) return true;
+  // Main group: consume pending agent notifications BEFORE the
+  // empty-messages early return — a promoted PR awaiting Skippy's
+  // decision (or a deploy failure) must wake the agent even when no
+  // user message arrived. The wake path is the throttled count poll
+  // in startMessageLoop, which enqueues this group; consumption
+  // happens only here so delivery stays single-point.
+  let notifContext = '';
+  if (isMainGroup) {
+    try {
+      const notifResp = await fetch(`${DASHBOARD_API_URL}/chat/pending-notifications`, { method: 'POST', signal: AbortSignal.timeout(3000) });
+      const notifData = await notifResp.json() as { notifications?: AgentNotification[] };
+      if (notifData.notifications && notifData.notifications.length > 0) {
+        notifContext = notifData.notifications.map(formatAgentNotification).join('\n\n');
+        logger.info({ count: notifData.notifications.length }, 'Injected agent notifications into prompt');
+      }
+    } catch (err) {
+      logger.debug({ err }, 'Failed to fetch agent notifications (non-fatal)');
+    }
+  }
 
-  // Save any image attachments to disk for agent access
-  saveMessageImages(missedMessages, group.folder);
+  if (missedMessages.length === 0 && !notifContext) return true;
 
-  // If any messages have images and the current model lacks vision support,
-  // route images to GLM-vision for text descriptions before the agent sees them.
-  const modelName = getModelName(group.folder);
-  if (LOCAL_MODEL_FAMILIES.has(modelName)) {
-    const hasImages = missedMessages.some(m => m.imagePath);
-    if (hasImages) {
-      await describeImagesViaGlm(missedMessages, group.folder);
+  if (missedMessages.length > 0) {
+    // Save any image attachments to disk for agent access
+    saveMessageImages(missedMessages, group.folder);
+
+    // If any messages have images and the current model lacks vision support,
+    // route images to GLM-vision for text descriptions before the agent sees them.
+    const modelName = getModelName(group.folder);
+    if (LOCAL_MODEL_FAMILIES.has(modelName)) {
+      const hasImages = missedMessages.some(m => m.imagePath);
+      if (hasImages) {
+        await describeImagesViaGlm(missedMessages, group.folder);
+      }
     }
   }
 
   // For non-main groups, check if trigger is required and present
+  // (non-main groups never receive notifications, so missedMessages
+  // is non-empty whenever we reach here for them).
   if (!isMainGroup && group.requiresTrigger !== false) {
     const hasTrigger = missedMessages.some((m) =>
       TRIGGER_PATTERN.test(m.content.trim()),
@@ -787,31 +848,21 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (!hasTrigger) return true;
   }
 
-  let prompt = formatMessages(missedMessages);
-
-  // Check for pending architect notifications (main group only)
-  if (isMainGroup) {
-    try {
-      const notifResp = await fetch(`${DASHBOARD_API_URL}/chat/pending-notifications`, { method: 'POST', signal: AbortSignal.timeout(3000) });
-      const notifData = await notifResp.json() as { notifications?: Array<{ title: string; summary: string }> };
-      if (notifData.notifications && notifData.notifications.length > 0) {
-        const notifContext = notifData.notifications.map(
-          (n) => `[ARCHITECT TASK COMPLETED: "${n.title}"]\n${n.summary}`
-        ).join('\n\n');
-        prompt = `${prompt}\n\n[System context — The Architect completed the following task(s) while you were idle. Mention this naturally in your response.]\n${notifContext}`;
-        logger.info({ count: notifData.notifications.length }, 'Injected architect notifications into prompt');
-      }
-    } catch (err) {
-      logger.debug({ err }, 'Failed to fetch architect notifications (non-fatal)');
-    }
+  let prompt = missedMessages.length > 0 ? formatMessages(missedMessages) : '';
+  if (notifContext) {
+    const header = '[System context — agent pipeline notifications. Act on each item now, this turn.]';
+    prompt = prompt ? `${prompt}\n\n${header}\n${notifContext}` : `${header}\n${notifContext}`;
   }
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
+  // (Notification-only wakes have no messages, hence no cursor to move.)
   const previousCursor = lastAgentTimestamp[chatJid] || '';
-  lastAgentTimestamp[chatJid] =
-    missedMessages[missedMessages.length - 1].timestamp;
-  saveState();
+  if (missedMessages.length > 0) {
+    lastAgentTimestamp[chatJid] =
+      missedMessages[missedMessages.length - 1].timestamp;
+    saveState();
+  }
 
   logger.info(
     { group: group.name, messageCount: missedMessages.length },
@@ -1068,6 +1119,31 @@ async function startMessageLoop(): Promise<void> {
     } catch (err) {
       logger.error({ err }, 'Error in message loop');
     }
+
+    // Wake poll: a promoted PR awaiting Skippy's decision (or a deploy
+    // event) must not wait for the next user message. Throttled,
+    // non-consuming peek at the pending count; a non-zero count
+    // enqueues a main-group check, and processGroupMessages consumes
+    // + injects (single delivery point, so no double-processing).
+    if (Date.now() - lastNotificationPoll >= NOTIFICATION_POLL_MS) {
+      lastNotificationPoll = Date.now();
+      try {
+        const mainJid = Object.keys(registeredGroups).find(
+          (jid) => registeredGroups[jid].folder === MAIN_GROUP_FOLDER,
+        );
+        if (mainJid) {
+          const resp = await fetch(`${DASHBOARD_API_URL}/chat/pending-notifications/count`, { signal: AbortSignal.timeout(3000) });
+          const data = await resp.json() as { count?: number };
+          if ((data.count ?? 0) > 0) {
+            logger.info({ count: data.count }, 'Pending agent notifications — waking main group');
+            queue.enqueueMessageCheck(mainJid);
+          }
+        }
+      } catch (err) {
+        logger.debug({ err }, 'Notification wake poll failed (non-fatal)');
+      }
+    }
+
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL));
   }
 }
