@@ -13,6 +13,9 @@ export const ASSISTANT_HAS_OWN_NUMBER =
   (process.env.ASSISTANT_HAS_OWN_NUMBER || envConfig.ASSISTANT_HAS_OWN_NUMBER) === 'true';
 export const POLL_INTERVAL = 200;
 export const SCHEDULER_POLL_INTERVAL = 60000;
+// Throttle for the agent-notification wake poll (promoted PRs, deploy
+// events). Non-consuming count peek — cheap, but no need to hammer it.
+export const NOTIFICATION_POLL_MS = 30000;
 
 // Absolute paths needed for container mounts
 const PROJECT_ROOT = process.cwd();
