@@ -44,6 +44,10 @@ import { formatMessages, formatOutbound } from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
+import {
+  type AgentNotification,
+  formatAgentNotifications,
+} from './notifications.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -71,41 +75,6 @@ const GOOSE_IMAGE = 'ghcr.io/block/goose@sha256:f92c0b5fa49ba6e96820535d9ac33178
 const RESEARCH_HOST = process.env.RESEARCH_HOST || 'http://192.168.68.70';
 const MCP_RESEARCH_URL = `${RESEARCH_HOST}:8000/mcp`;
 const DASHBOARD_API_URL = `${RESEARCH_HOST}:3000/api`;
-
-// Agent-pipeline notifications (delivered via /chat/pending-notifications).
-// kind/payload is the current shape; bare title/summary rows come from the
-// one-time legacy-queue drain and older API versions.
-interface AgentNotification {
-  kind?: string;
-  payload?: Record<string, unknown>;
-  title?: string;
-  summary?: string;
-}
-
-function formatAgentNotification(n: AgentNotification): string {
-  const p = (n.payload ?? n) as Record<string, unknown>;
-  switch (n.kind ?? 'task_complete') {
-    case 'pr_awaiting_decision':
-      return (
-        `[PR #${p.pr_number} PROMOTED — AWAITING YOUR DECISION]\n` +
-        `Repo: ${p.repo || 'unknown'}, round ${p.round}, head ${p.head_sha || 'unknown'}` +
-        (p.comment ? `, note from ${p.promoted_by || 'the Architect'}: ${p.comment}` : '') +
-        '.\nThe whole review chain has approved at this head SHA. Run your PR Approval ' +
-        'Workflow gates now (get_pr_approval_state first) and call approve_pr or ' +
-        'reject_pr this turn — the Architect is blocked until you decide.'
-      );
-    case 'deploy_failed':
-      return (
-        `[DEPLOY FAILED for commit ${p.sha}]\n${p.run_url || ''}\n` +
-        'The merge landed but the code is NOT live in production. Tell Christian ' +
-        'immediately, including the commit SHA and the run link. Silence ≠ success.'
-      );
-    case 'deploy_succeeded':
-      return `[Deploy succeeded for commit ${p.sha}] ${p.subject || ''} — the new code is live.`;
-    default:
-      return `[ARCHITECT TASK COMPLETED: "${p.title}"]\n${p.summary}`;
-  }
-}
 
 // AI model config cache (fetched from settings API)
 interface AiModelConfig {
@@ -813,7 +782,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       const notifResp = await fetch(`${DASHBOARD_API_URL}/chat/pending-notifications`, { method: 'POST', signal: AbortSignal.timeout(3000) });
       const notifData = await notifResp.json() as { notifications?: AgentNotification[] };
       if (notifData.notifications && notifData.notifications.length > 0) {
-        notifContext = notifData.notifications.map(formatAgentNotification).join('\n\n');
+        notifContext = formatAgentNotifications(notifData.notifications);
         logger.info({ count: notifData.notifications.length }, 'Injected agent notifications into prompt');
       }
     } catch (err) {
